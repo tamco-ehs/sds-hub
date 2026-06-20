@@ -403,7 +403,9 @@ function validateApiUrl(value) {
     const url = new URL(String(value || "").trim());
     const local = ["localhost","127.0.0.1","[::1]"].includes(url.hostname);
     if (url.protocol !== "https:" && !(local && url.protocol === "http:")) return "";
-    return url.origin;
+    if (url.search || url.hash) return "";
+    const basePath = url.pathname.replace(/\/+$/, "");
+    return `${url.origin}${basePath}`;
   } catch { return ""; }
 }
 
