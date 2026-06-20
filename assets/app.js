@@ -2,7 +2,10 @@ import {
   filterCatalog,
   formatRevisionDate,
   getDepartments,
+  getLanguages,
+  languageLabel,
   resolveDepartment,
+  resolveLanguage,
   sanitizeCatalog
 } from "./catalog-utils.js";
 
@@ -30,6 +33,7 @@ const elements = {
   clearSearch: document.querySelector("#clearSearch"),
   resetFilters: document.querySelector("#resetFilters"),
   departmentFilters: document.querySelector("#departmentFilters"),
+  languageFilters: document.querySelector("#languageFilters"),
   resultsCount: document.querySelector("#resultsCount"),
   resultsList: document.querySelector("#resultsList"),
   loadingState: document.querySelector("#loadingState"),
@@ -67,11 +71,14 @@ const elements = {
 const state = {
   catalog: [],
   departments: [],
+  languages: [],
   query: "",
   department: "All",
+  language: "All",
   selectedId: "",
   updatedAt: "",
-  loaded: false
+  loaded: false,
+  previewToken: 0
 };
 
 let toastTimer;
@@ -140,11 +147,13 @@ async function loadCatalog() {
 
     state.catalog = catalog;
     state.departments = getDepartments(catalog);
+    state.languages = getLanguages(catalog);
     state.updatedAt = [basePayload.updatedAt, supplementalPayload?.updatedAt].filter(Boolean).sort().at(-1) || "";
     state.loaded = true;
 
     applyRoute();
     renderDepartmentFilters();
+    renderLanguageFilters();
     renderCatalog();
     updateCatalogTimestamp();
     await pruneOfflineDocuments();
@@ -182,6 +191,7 @@ function setLoadState(mode) {
 function applyRoute() {
   const params = new URLSearchParams(window.location.search);
   state.department = resolveDepartment(params.get("dept"), state.departments);
+  state.language = resolveLanguage(params.get("lang"), state.languages);
 
   const requestedId = params.get("chemical") || "";
   const requestedDocument = state.catalog.find((document) => document.id === requestedId);
@@ -210,10 +220,41 @@ function renderDepartmentFilters() {
   updateResetButton();
 }
 
+function renderLanguageFilters() {
+  if (!elements.languageFilters) return;
+  const fragment = document.createDocumentFragment();
+  const languages = ["All", ...state.languages];
+
+  languages.forEach((language) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "filter-button";
+    button.dataset.language = language;
+    button.setAttribute("aria-pressed", String(language === state.language));
+    button.textContent = language === "All" ? "All languages" : languageLabel(language);
+    fragment.append(button);
+  });
+
+  elements.languageFilters.replaceChildren(fragment);
+}
+
+function selectLanguage(language) {
+  if (language !== "All" && !state.languages.includes(language)) return;
+  state.language = language;
+
+  for (const button of elements.languageFilters.querySelectorAll(".filter-button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.language === language));
+  }
+
+  updateResetButton();
+  updateUrl({ replace: true });
+  renderCatalog();
+}
+
 function renderCatalog() {
   if (!state.loaded) return;
 
-  const matches = filterCatalog(state.catalog, state.query, state.department);
+  const matches = filterCatalog(state.catalog, state.query, state.department, state.language);
   elements.resultsList.replaceChildren();
   elements.noResultsState.hidden = matches.length > 0 || state.catalog.length === 0;
   elements.resultsList.hidden = matches.length === 0 || state.catalog.length === 0;
@@ -259,6 +300,13 @@ function createResultItem(documentRecord) {
   documentType.textContent = documentRecord.documentType;
   meta.append(manufacturer, documentType, revision);
 
+  if (documentRecord.language) {
+    const language = document.createElement("span");
+    language.className = "result-language";
+    language.textContent = languageLabel(documentRecord.language);
+    meta.append(language);
+  }
+
   department.className = "result-department";
   department.textContent = documentRecord.department;
 
@@ -282,7 +330,7 @@ function selectDepartment(department) {
 }
 
 function updateResetButton() {
-  elements.resetFilters.hidden = state.department === "All" && !state.query;
+  elements.resetFilters.hidden = state.department === "All" && state.language === "All" && !state.query;
 }
 
 function selectDocumentById(documentId, options) {
@@ -323,7 +371,8 @@ function showDocument(documentRecord, { updateHistory = true, scroll = true } = 
   elements.previewButton.setAttribute("aria-expanded", "false");
   elements.previewButton.querySelector("span").textContent = "Preview PDF on this page";
   elements.pdfPreviewPanel.hidden = true;
-  elements.pdfViewer.removeAttribute("src");
+  state.previewToken += 1;
+  elements.pdfViewer.replaceChildren();
   elements.offlineButton.dataset.pdfUrl = pdfUrl;
   elements.offlineButton.dataset.revisionDate = documentRecord.revisionDate;
   elements.offlineButton.disabled = false;
@@ -365,6 +414,9 @@ function updateUrl({ replace }) {
 
   if (state.department === "All") url.searchParams.delete("dept");
   else url.searchParams.set("dept", state.department);
+
+  if (state.language === "All") url.searchParams.delete("lang");
+  else url.searchParams.set("lang", state.language);
 
   if (state.selectedId) url.searchParams.set("chemical", state.selectedId);
   else url.searchParams.delete("chemical");
@@ -420,11 +472,74 @@ function togglePdfPreview() {
     : "Preview PDF on this page";
 
   if (willOpen) {
-    elements.pdfViewer.src = `${pdfUrl}#view=FitH`;
+    void renderPdfPreview(pdfUrl);
     window.setTimeout(() => elements.pdfPreviewPanel.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
   } else {
-    elements.pdfViewer.removeAttribute("src");
+    state.previewToken += 1;
+    elements.pdfViewer.replaceChildren();
   }
+}
+
+async function renderPdfPreview(pdfUrl) {
+  const token = (state.previewToken += 1);
+  const viewer = elements.pdfViewer;
+  showPreviewMessage("Loading preview...");
+
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib) {
+    showPreviewMessage("The PDF preview component is unavailable. Use “Open official SDS PDF”.");
+    return;
+  }
+
+  let pdf;
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./assets/vendor/pdf.worker.min.js", document.baseURI).href;
+    pdf = await pdfjsLib.getDocument({ url: pdfUrl, isEvalSupported: false }).promise;
+    if (token !== state.previewToken) return;
+
+    const pageCount = Math.min(pdf.numPages, 50);
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const cssWidth = Math.max(viewer.clientWidth - 16, 280);
+    viewer.replaceChildren();
+
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      if (token !== state.previewToken) { page.cleanup(); return; }
+
+      const baseViewport = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: (cssWidth / baseViewport.width) * ratio });
+      const canvas = document.createElement("canvas");
+      canvas.className = "pdf-page";
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      viewer.append(canvas);
+
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+      page.cleanup();
+      if (token !== state.previewToken) return;
+    }
+
+    if (pdf.numPages > pageCount) {
+      const note = document.createElement("p");
+      note.className = "pdf-viewer-status";
+      note.textContent = `Showing the first ${pageCount} pages. Use “Open official SDS PDF” for the full document.`;
+      viewer.append(note);
+    }
+  } catch (error) {
+    console.error("Unable to render the PDF preview", error);
+    if (token === state.previewToken) {
+      showPreviewMessage("This preview could not be displayed here. Use “Open official SDS PDF” to read the document.");
+    }
+  } finally {
+    if (pdf) await pdf.destroy().catch(() => {});
+  }
+}
+
+function showPreviewMessage(message) {
+  const status = document.createElement("p");
+  status.className = "pdf-viewer-status";
+  status.textContent = message;
+  elements.pdfViewer.replaceChildren(status);
 }
 
 async function storeOfflineCopy() {
@@ -562,9 +677,11 @@ function bindEvents() {
   elements.resetFilters.addEventListener("click", () => {
     state.query = "";
     state.department = "All";
+    state.language = "All";
     elements.searchInput.value = "";
     elements.clearSearch.hidden = true;
     renderDepartmentFilters();
+    renderLanguageFilters();
     updateUrl({ replace: true });
     renderCatalog();
   });
@@ -573,6 +690,13 @@ function bindEvents() {
     const button = event.target.closest(".filter-button");
     if (button) selectDepartment(button.dataset.department);
   });
+
+  if (elements.languageFilters) {
+    elements.languageFilters.addEventListener("click", (event) => {
+      const button = event.target.closest(".filter-button");
+      if (button) selectLanguage(button.dataset.language);
+    });
+  }
 
   elements.resultsList.addEventListener("click", (event) => {
     const button = event.target.closest(".result-button");
@@ -592,6 +716,7 @@ function bindEvents() {
     if (!state.loaded) return;
     applyRoute();
     renderDepartmentFilters();
+    renderLanguageFilters();
     renderCatalog();
   });
 }

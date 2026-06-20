@@ -61,12 +61,35 @@ export function getDepartments(documents) {
     .sort(collator.compare);
 }
 
-export function filterCatalog(documents, query = "", department = "All") {
+export function getLanguages(documents) {
+  return [...new Set(documents.map((document) => document.language).filter(Boolean))]
+    .sort(collator.compare);
+}
+
+export function resolveLanguage(requested, languages) {
+  if (!requested) return "All";
+  return languages.find((language) => language.toLocaleLowerCase("en") === requested.toLocaleLowerCase("en")) || "All";
+}
+
+// Display label for a stored language value. The catalog stores "Malay"; the
+// facility refers to it as Bahasa Malaysia. English stays English.
+export function languageLabel(language) {
+  if (!language) return "";
+  const normalized = language.trim().toLocaleLowerCase("en");
+  if (normalized === "malay" || normalized === "bahasa melayu" || normalized === "bahasa malaysia" || normalized === "bm") {
+    return "Bahasa Malaysia";
+  }
+  if (normalized === "english" || normalized === "en") return "English";
+  return language.trim();
+}
+
+export function filterCatalog(documents, query = "", department = "All", language = "All") {
   const normalizedQuery = normalizeText(query);
   const terms = normalizedQuery.split(" ").filter(Boolean);
 
   return documents.filter((document) => {
     if (department !== "All" && document.department !== department) return false;
+    if (language !== "All" && document.language !== language) return false;
     if (terms.length === 0) return true;
 
     const searchableText = normalizeText([

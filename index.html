@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#102a43">
   <meta name="description" content="Immediate access to approved workplace Safety Data Sheets.">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://jxvsxwsmfycvewxeyxmp.supabase.co https://github.com https://objects.githubusercontent.com https://release-assets.githubusercontent.com; font-src 'self'; form-action 'none'; frame-ancestors 'none'; frame-src 'self' https://github.com https://objects.githubusercontent.com https://release-assets.githubusercontent.com; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; upgrade-insecure-requests">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://jxvsxwsmfycvewxeyxmp.supabase.co https://github.com https://objects.githubusercontent.com https://release-assets.githubusercontent.com; font-src 'self'; form-action 'none'; frame-ancestors 'none'; frame-src 'self' https://github.com https://objects.githubusercontent.com https://release-assets.githubusercontent.com; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self' blob:; upgrade-insecure-requests">
   <title>Digital SDS Hub</title>
   <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="stylesheet" href="./assets/styles.css">
   <script src="./assets/config.js" defer></script>
+  <script src="./assets/vendor/pdf.min.js" defer></script>
   <script type="module" src="./assets/app.js"></script>
 </head>
 <body>
@@ -80,6 +81,13 @@
           <button id="resetFilters" class="text-button" type="button" hidden>Reset filters</button>
         </div>
         <div id="departmentFilters" class="filter-list" role="group" aria-label="Filter by department"></div>
+      </div>
+
+      <div class="filter-section" aria-labelledby="language-heading">
+        <div class="section-row">
+          <h2 id="language-heading">Language</h2>
+        </div>
+        <div id="languageFilters" class="filter-list" role="group" aria-label="Filter by language"></div>
       </div>
 
       <div class="results-section" aria-labelledby="results-heading">
@@ -175,9 +183,9 @@
         <div id="pdfPreviewPanel" class="pdf-preview" hidden>
           <div class="pdf-preview-heading">
             <strong>Official SDS preview</strong>
-            <span>Use “Open official SDS PDF” if your browser cannot display the preview.</span>
+            <span>Scroll to read every page. Use “Open official SDS PDF” if a page does not display.</span>
           </div>
-          <iframe id="pdfViewer" title="Official Safety Data Sheet PDF preview" loading="lazy"></iframe>
+          <div id="pdfViewer" class="pdf-viewer" tabindex="0" role="document" aria-label="Official Safety Data Sheet preview"></div>
         </div>
 
         <button id="offlineButton" class="secondary-button full-width" type="button">
