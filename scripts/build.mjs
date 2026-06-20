@@ -8,7 +8,7 @@ const output = path.join(root, "dist");
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 
-for (const file of ["index.html", "manifest.webmanifest", "service-worker.js", "robots.txt", "404.html"]) {
+for (const file of ["index.html", "admin.html", "manifest.webmanifest", "service-worker.js", "robots.txt", "404.html"]) {
   await cp(path.join(root, file), path.join(output, file));
 }
 

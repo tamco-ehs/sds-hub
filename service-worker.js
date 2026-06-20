@@ -1,4 +1,4 @@
-const SHELL_CACHE = "sds-shell-v1.2.0";
+const SHELL_CACHE = "sds-shell-v1.4.0";
 const DOCUMENT_CACHE = "sds-documents-v1";
 const SHELL_FILES = [
   "./",

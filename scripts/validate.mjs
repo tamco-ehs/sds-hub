@@ -25,9 +25,12 @@ const allowedFields = new Set([
 
 const requiredSiteFiles = [
   "index.html",
+  "admin.html",
   "manifest.webmanifest",
   "service-worker.js",
   "assets/app.js",
+  "assets/admin.js",
+  "assets/admin.css",
   "assets/catalog-utils.js",
   "assets/config.js",
   "assets/icon.svg",
@@ -97,6 +100,9 @@ if (catalog) {
 const textFiles = await collectTextFiles(root);
 const secretPatterns = [
   { name: "Google API key", pattern: /AIza[0-9A-Za-z_-]{30,}/g },
+  { name: "Google AI Studio key", pattern: /AQ\.[0-9A-Za-z._-]{40,}/g },
+  { name: "GitHub access token", pattern: /(?:github_pat_|ghp_)[0-9A-Za-z_]{20,}/g },
+  { name: "Supabase personal access token", pattern: /sbp_[0-9A-Za-z_-]{20,}/g },
   { name: "private key", pattern: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g }
 ];
 
@@ -114,7 +120,9 @@ if (/aiEnabled:\s*true/.test(configSource) && /aiProxyUrl:\s*"\s*"/.test(configS
 }
 
 const indexSource = await readFile(path.join(root, "index.html"), "utf8");
-validateHtmlShell(indexSource);
+const adminSource = await readFile(path.join(root, "admin.html"), "utf8");
+validateHtmlShell(indexSource, "index.html");
+validateHtmlShell(adminSource, "admin.html");
 
 for (const warning of warnings) console.warn(`WARNING: ${warning}`);
 if (errors.length) {
@@ -125,31 +133,31 @@ if (errors.length) {
 
 console.log(`Validated ${catalog?.documents?.length || 0} catalog document(s); no release-blocking errors found.`);
 
-function validateHtmlShell(html) {
+function validateHtmlShell(html, label) {
   const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
   const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
-  if (duplicateIds.length) errors.push(`index.html has duplicate ids: ${duplicateIds.join(", ")}.`);
+  if (duplicateIds.length) errors.push(`${label} has duplicate ids: ${duplicateIds.join(", ")}.`);
 
   const idSet = new Set(ids);
   const singleReferences = [...html.matchAll(/\b(?:for|aria-describedby|aria-labelledby)="([^"]+)"/g)]
     .flatMap((match) => match[1].split(/\s+/));
   const missingReferences = [...new Set(singleReferences.filter((id) => !idSet.has(id)))];
-  if (missingReferences.length) errors.push(`index.html references missing ids: ${missingReferences.join(", ")}.`);
+  if (missingReferences.length) errors.push(`${label} references missing ids: ${missingReferences.join(", ")}.`);
 
   const csp = html.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i)?.[1] || "";
-  if (!csp) errors.push("index.html is missing its Content Security Policy.");
-  if (/unsafe-inline|unsafe-eval/i.test(csp)) errors.push("Content Security Policy must not allow unsafe-inline or unsafe-eval.");
+  if (!csp) errors.push(`${label} is missing its Content Security Policy.`);
+  if (/unsafe-inline|unsafe-eval/i.test(csp)) errors.push(`${label} Content Security Policy must not allow unsafe-inline or unsafe-eval.`);
 
   const blankTargets = [...html.matchAll(/<a\b[^>]*target="_blank"[^>]*>/gi)].map((match) => match[0]);
   if (blankTargets.some((tag) => !/\brel="[^"]*noopener[^"]*"/i.test(tag))) {
-    errors.push("Every target=_blank link must include rel=noopener.");
+    errors.push(`${label}: every target=_blank link must include rel=noopener.`);
   }
 
   const localAssets = [...html.matchAll(/\b(?:href|src)="(\.\/[^"]+)"/g)]
     .map((match) => match[1].split(/[?#]/)[0])
     .filter((value) => value !== "./");
   for (const asset of new Set(localAssets)) {
-    if (!existsSync(path.join(root, asset.slice(2)))) errors.push(`index.html references missing local asset: ${asset}.`);
+    if (!existsSync(path.join(root, asset.slice(2)))) errors.push(`${label} references missing local asset: ${asset}.`);
   }
 }
 

@@ -4,8 +4,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js",
+    "check": "node --check src/index.js && node --check src/admin.js && node --check src/extraction.js && node --check src/filename.js && node --check src/intake-schema.js",
+    "test": "node --test test/*.test.js",
     "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "unpdf": "1.6.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "wrangler": "4.103.0"

@@ -49,6 +49,13 @@ test("validates safe catalog records", () => {
   assert.equal(isValidDocument({ ...fixtures[0], revisionDate: "15/01/2026" }), false);
   assert.equal(isValidDocument({ ...fixtures[0], revisionDate: "2026-02-31" }), false);
   assert.equal(isValidDocument({ ...fixtures[0], revisionDate: "" }), true);
+  assert.equal(isValidDocument({
+    ...fixtures[0],
+    id: "f0e6f00c-c039-4fb4-85b7-b46c1928ffe1",
+    file: "SDS_WD-40_Aerosol_WD-40_Company_2023-06-26_EN.pdf",
+    pdfUrl: "https://github.com/izzulwork1/sds-hub/releases/download/sds-approved/example.pdf"
+  }), true);
+  assert.equal(isValidDocument({ ...fixtures[0], file: "SDS_Unsafe/Path.pdf", pdfUrl: "https://example.com/file.pdf" }), false);
 });
 
 test("rejects impossible ISO calendar dates", () => {

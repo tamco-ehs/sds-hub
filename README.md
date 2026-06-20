@@ -1,8 +1,6 @@
 # Digital SDS Hub
 
-A production-oriented, serverless Safety Data Sheet catalog for GitHub Pages. The static application keeps the manufacturer's approved PDF as the primary source, works on phones and desktops, supports stable QR-code routes, and can store verified PDFs for deliberate offline use.
-
-The catalog is intentionally empty. No legal SDS content is fabricated or bundled. Add approved manufacturer PDFs before facility release.
+A production-oriented Safety Data Sheet catalog for GitHub Pages. The static application keeps the manufacturer's approved PDF as the primary source, works on phones and desktops, supports stable QR-code routes, and can store verified PDFs for deliberate offline use. Supabase provides the controlled upload, extraction, EHS review, audit, and approval API; GitHub Releases retain original and approved PDFs without exposing Gemini credentials to browsers.
 
 ## What is included
 
@@ -12,7 +10,10 @@ The catalog is intentionally empty. No legal SDS content is fabricated or bundle
 - Explicit, signature-checked offline PDF storage
 - Network-first service worker behavior for safety-critical data and PDFs
 - Content Security Policy with AI disabled by default
-- Optional Cloudflare Worker proxy that grounds Gemini responses in the selected official PDF
+- Supabase Edge Function for server-side intake and structured Gemini extraction
+- Admin intake at `admin.html`, with Postgres audit history and GitHub Release asset storage
+- Server-side PDF text extraction, regex-first metadata detection, and optional Gemini JSON fallback
+- EHS approval, duplicate handling, and controlled approved filename generation
 - Automated tests, catalog/PDF validation, production build, and GitHub Pages deployment workflow
 
 ## Local verification
@@ -122,9 +123,13 @@ window.SDS_CONFIG = Object.freeze({
   emergencyHref: "https://example.org/emergency",
   aiEnabled: false,
   aiProxyUrl: "",
+  adminApiUrl: "",
+  catalogApiUrl: "",
   maxQuestionLength: 500
 });
 ```
+
+For the production intake backend, follow [SDS-INTAKE-DEPLOYMENT.md](SDS-INTAKE-DEPLOYMENT.md). The legacy local onboarding commands remain available for an offline administrator workflow.
 
 If `emergencyHref` contains internal or sensitive information, do not publish it through a public GitHub Pages repository.
 

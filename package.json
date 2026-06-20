@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check assets/app.js && node --check assets/catalog-utils.js && node --check service-worker.js && node --check worker/src/index.js",
-    "test": "npm run check && node --test tests/*.test.mjs && node scripts/validate.mjs",
+    "check": "node --check assets/app.js && node --check assets/admin.js && node --check assets/catalog-utils.js && node --check service-worker.js && npm --prefix worker run check",
+    "test": "npm run check && node --test tests/*.test.mjs && npm --prefix worker test && node scripts/validate.mjs",
     "validate": "node scripts/validate.mjs",
     "validate:release": "node scripts/validate.mjs --require-data",
     "build": "node scripts/validate.mjs && node scripts/build.mjs",
+    "deploy:intake": "supabase functions deploy sds-api --project-ref jxvsxwsmfycvewxeyxmp --no-verify-jwt",
     "onboard:scan": "python scripts/onboard_pdfs.py",
     "onboard:apply": "python scripts/onboard_pdfs.py --apply",
     "enrich:scan": "python scripts/enrich_metadata.py",
@@ -18,5 +19,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "supabase": "^2.107.0"
   }
 }

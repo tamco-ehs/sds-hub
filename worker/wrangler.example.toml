@@ -1,6 +1,7 @@
 name = "sds-ai-proxy"
 main = "src/index.js"
 compatibility_date = "2026-06-20"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
 # Exact public origin of the GitHub Pages site. Separate multiple origins with commas.
@@ -8,6 +9,17 @@ ALLOWED_ORIGIN = "https://OWNER.github.io"
 # Exact public URL of the deployed catalog JSON.
 SDS_CATALOG_URL = "https://OWNER.github.io/REPOSITORY/data/sds-data.json"
 GEMINI_MODEL = "gemini-2.5-flash"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sds-intake"
+# Replace this placeholder with the ID returned by `wrangler d1 create sds-intake`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "SDS_FILES"
+bucket_name = "sds-files"
 
 [[ratelimits]]
 name = "AI_RATE_LIMITER"
@@ -17,3 +29,4 @@ simple = { limit = 10, period = 60 }
 # Add secrets with the CLI; never write their values here:
 #   npx wrangler secret put GEMINI_API_KEY
 #   npx wrangler secret put RATE_LIMIT_SALT
+#   npx wrangler secret put ADMIN_API_TOKEN

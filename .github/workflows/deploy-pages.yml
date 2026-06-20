@@ -24,6 +24,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      - name: Install site tooling
+        run: npm ci
+      - name: Install legacy proxy test dependencies
+        run: npm --prefix worker ci
       - name: Validate and test
         run: npm test
       - name: Build production artifact

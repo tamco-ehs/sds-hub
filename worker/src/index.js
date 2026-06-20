@@ -1,3 +1,5 @@
+import { handleIntakeRequest } from "./admin.js";
+
 const MAX_REQUEST_BYTES = 4096;
 const MAX_QUESTION_LENGTH = 500;
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
@@ -7,6 +9,9 @@ const FILE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.pdf$/;
 
 export default {
   async fetch(request, env) {
+    const intakeResponse = await handleIntakeRequest(request, env);
+    if (intakeResponse) return intakeResponse;
+
     const origin = request.headers.get("Origin") || "";
     const corsHeaders = getCorsHeaders(origin, env.ALLOWED_ORIGIN);
 
@@ -20,7 +25,8 @@ export default {
     if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, corsHeaders);
     if (!corsHeaders) return json({ error: "Origin is not allowed." }, 403);
 
-    if (!env.GEMINI_API_KEY || !env.SDS_CATALOG_URL || !env.AI_RATE_LIMITER || !env.RATE_LIMIT_SALT) {
+    const hasApprovedSource = Boolean((env.DB && env.SDS_FILES) || env.SDS_CATALOG_URL);
+    if (!env.GEMINI_API_KEY || !hasApprovedSource || !env.AI_RATE_LIMITER || !env.RATE_LIMIT_SALT) {
       return json({ error: "AI assistance is not configured." }, 503, corsHeaders);
     }
 
@@ -52,8 +58,7 @@ export default {
     }
 
     try {
-      const catalogDocument = await findApprovedDocument(env.SDS_CATALOG_URL, chemicalId);
-      const pdfBytes = await fetchApprovedPdf(env.SDS_CATALOG_URL, catalogDocument.file);
+      const { document: catalogDocument, pdfBytes } = await resolveApprovedDocument(env, chemicalId);
       const answer = await askGemini(env, catalogDocument, question, pdfBytes);
       return json({
         answer: `Supplemental AI summary - verify against the official SDS:\n\n${answer}`,
@@ -100,6 +105,37 @@ async function createRateLimitKey(request, salt) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function resolveApprovedDocument(env, chemicalId) {
+  if (env.DB && env.SDS_FILES) {
+    const row = await env.DB.prepare(`
+      SELECT id, product_name, trade_name, approved_filename, approved_storage_key, revision_date
+      FROM sds_documents WHERE id = ? AND status = 'Approved' LIMIT 1
+    `).bind(chemicalId).first();
+    if (row) {
+      const object = await env.SDS_FILES.get(row.approved_storage_key);
+      if (!object) throw new PublicError("The official SDS PDF is unavailable.", 503);
+      const contentLength = Number(object.size || 0);
+      if (contentLength > MAX_PDF_BYTES) throw new PublicError("The SDS PDF exceeds the AI processing limit.", 413);
+      const pdfBytes = new Uint8Array(await object.arrayBuffer());
+      validatePdfBytes(pdfBytes);
+      return {
+        document: {
+          id: row.id,
+          name: String(row.product_name || row.trade_name || "Approved SDS").slice(0, 200),
+          file: row.approved_filename,
+          department: "",
+          revisionDate: String(row.revision_date || "").slice(0, 100)
+        },
+        pdfBytes
+      };
+    }
+  }
+
+  if (!env.SDS_CATALOG_URL) throw new PublicError("The selected chemical is not in the approved SDS catalog.", 404);
+  const document = await findApprovedDocument(env.SDS_CATALOG_URL, chemicalId);
+  return { document, pdfBytes: await fetchApprovedPdf(env.SDS_CATALOG_URL, document.file) };
+}
+
 async function findApprovedDocument(catalogUrlValue, chemicalId) {
   const catalogUrl = requireHttpsUrl(catalogUrlValue, "SDS catalog");
   const response = await fetch(catalogUrl, {
@@ -143,12 +179,16 @@ async function fetchApprovedPdf(catalogUrlValue, filename) {
   if (contentLength > MAX_PDF_BYTES) throw new PublicError("The SDS PDF exceeds the AI processing limit.", 413);
 
   const bytes = new Uint8Array(await response.arrayBuffer());
+  validatePdfBytes(bytes);
+
+  return bytes;
+}
+
+function validatePdfBytes(bytes) {
   if (bytes.byteLength > MAX_PDF_BYTES) throw new PublicError("The SDS PDF exceeds the AI processing limit.", 413);
   if (new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") {
     throw new PublicError("The approved SDS file is not a valid PDF.", 502);
   }
-
-  return bytes;
 }
 
 async function askGemini(env, document, question, pdfBytes) {

@@ -10,5 +10,7 @@ window.SDS_CONFIG = Object.freeze({
   emergencyHref: "",
   aiEnabled: false,
   aiProxyUrl: "",
+  adminApiUrl: "https://jxvsxwsmfycvewxeyxmp.supabase.co/functions/v1/sds-api",
+  catalogApiUrl: "https://jxvsxwsmfycvewxeyxmp.supabase.co/functions/v1/sds-api/v1/catalog",
   maxQuestionLength: 500
 });

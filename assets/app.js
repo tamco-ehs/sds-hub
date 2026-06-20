@@ -17,6 +17,7 @@ const config = Object.freeze({
   emergencyHref: "",
   aiEnabled: false,
   aiProxyUrl: "",
+  catalogApiUrl: "",
   maxQuestionLength: 500,
   ...(window.SDS_CONFIG || {})
 });
@@ -119,22 +120,27 @@ async function loadCatalog() {
   setLoadState("loading");
 
   try {
-    const response = await fetch(DATA_URL, { cache: "no-store", headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`Catalog returned HTTP ${response.status}`);
+    const basePayload = await fetchCatalog(DATA_URL);
+    const baseCatalog = sanitizeCatalog(basePayload.documents);
+    if (baseCatalog.length !== basePayload.documents.length) throw new Error("One or more local catalog records failed validation");
 
-    const payload = await response.json();
-    if (!payload || payload.schemaVersion !== 1 || !Array.isArray(payload.documents)) {
-      throw new Error("Catalog schema is invalid");
+    let supplementalPayload = null;
+    const supplementalUrl = safeHttpUrl(config.catalogApiUrl);
+    if (supplementalUrl) {
+      try { supplementalPayload = await fetchCatalog(supplementalUrl); }
+      catch (error) { console.warn("Approved intake catalog is temporarily unavailable; using the GitHub Pages catalog.", error); }
     }
-
-    const catalog = sanitizeCatalog(payload.documents);
-    if (catalog.length !== payload.documents.length) {
-      throw new Error("One or more catalog records failed validation");
+    const supplementalCatalog = supplementalPayload ? sanitizeCatalog(supplementalPayload.documents) : [];
+    if (supplementalPayload && supplementalCatalog.length !== supplementalPayload.documents.length) {
+      console.warn("Some supplemental catalog records failed validation and were not published.");
     }
+    const merged = new Map(baseCatalog.map((documentRecord) => [documentRecord.id, documentRecord]));
+    for (const documentRecord of supplementalCatalog) merged.set(documentRecord.id, documentRecord);
+    const catalog = sanitizeCatalog([...merged.values()]);
 
     state.catalog = catalog;
     state.departments = getDepartments(catalog);
-    state.updatedAt = typeof payload.updatedAt === "string" ? payload.updatedAt : "";
+    state.updatedAt = [basePayload.updatedAt, supplementalPayload?.updatedAt].filter(Boolean).sort().at(-1) || "";
     state.loaded = true;
 
     applyRoute();
@@ -152,6 +158,14 @@ async function loadCatalog() {
     setLoadState("error");
     showDetailPlaceholder();
   }
+}
+
+async function fetchCatalog(url) {
+  const response = await fetch(url, { cache: "no-store", headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`Catalog returned HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!payload || payload.schemaVersion !== 1 || !Array.isArray(payload.documents)) throw new Error("Catalog schema is invalid");
+  return payload;
 }
 
 function setLoadState(mode) {
@@ -302,7 +316,7 @@ function showDocument(documentRecord, { updateHistory = true, scroll = true } = 
   elements.hazardTags.replaceChildren(tagFragment);
   elements.hazardTags.hidden = documentRecord.hazards.length === 0;
 
-  const pdfUrl = new URL(`./pdfs/${documentRecord.file}`, window.location.href).href;
+  const pdfUrl = getDocumentPdfUrl(documentRecord);
   elements.pdfLink.href = pdfUrl;
   elements.pdfLink.dataset.pdfUrl = pdfUrl;
   elements.previewButton.dataset.pdfUrl = pdfUrl;
@@ -459,12 +473,16 @@ async function pruneOfflineDocuments() {
 
   try {
     const cache = await caches.open(DOCUMENT_CACHE);
-    const allowedUrls = new Set(state.catalog.map((documentRecord) => new URL(`./pdfs/${documentRecord.file}`, window.location.href).href));
+    const allowedUrls = new Set(state.catalog.map(getDocumentPdfUrl));
     const requests = await cache.keys();
     await Promise.all(requests.filter((request) => !allowedUrls.has(request.url)).map((request) => cache.delete(request)));
   } catch (error) {
     console.warn("Unable to prune old offline documents", error);
   }
+}
+
+function getDocumentPdfUrl(documentRecord) {
+  return safeHttpUrl(documentRecord.pdfUrl) || new URL(`./pdfs/${documentRecord.file}`, window.location.href).href;
 }
 
 function updateQuestionCounter() {

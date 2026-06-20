@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102a43">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://jxvsxwsmfycvewxeyxmp.supabase.co; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self' blob:">
+  <title>SDS Intake Administration</title>
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./assets/admin.css">
+  <script src="./assets/config.js" defer></script>
+  <script type="module" src="./assets/admin.js"></script>
+</head>
+<body>
+  <header class="admin-header">
+    <a class="admin-brand" href="./">
+      <img src="./assets/icon.svg" alt="">
+      <span><strong>SDS Intake Control</strong><small>EHS review workspace</small></span>
+    </a>
+    <div id="connectionBadge" class="connection-badge">Not connected</div>
+  </header>
+
+  <div class="admin-shell">
+    <aside class="admin-sidebar">
+      <nav aria-label="SDS administration">
+        <button class="nav-button is-active" data-view="dashboard" type="button">Review Dashboard</button>
+        <button class="nav-button" data-view="upload" type="button">SDS Upload</button>
+        <button class="nav-button" data-view="queue" type="button">Parsing Queue</button>
+        <button class="nav-button" data-view="review" type="button">Review &amp; Approval</button>
+        <button class="nav-button" data-view="master" type="button">Master Register</button>
+        <button class="nav-button" data-view="duplicates" type="button">Duplicate Checker</button>
+        <button id="detailNav" class="nav-button" data-view="detail" type="button" disabled>SDS Detail</button>
+      </nav>
+      <a class="back-link" href="./">Return to public SDS Hub</a>
+    </aside>
+
+    <main class="admin-main">
+      <section id="connectionPanel" class="connection-panel">
+        <div>
+          <h1>Connect the EHS workspace</h1>
+          <p>The administrator token is kept only in this browser tab. It is never written to source code.</p>
+        </div>
+        <div class="connection-fields">
+          <label>API URL<input id="apiUrlInput" type="url" placeholder="https://sds-api.example.workers.dev"></label>
+          <label>Reviewer name<input id="reviewerInput" type="text" maxlength="100" autocomplete="name" placeholder="EHS reviewer"></label>
+          <label>Admin token<input id="adminTokenInput" type="password" autocomplete="off" placeholder="Worker ADMIN_API_TOKEN"></label>
+          <button id="connectButton" class="primary-action" type="button">Connect</button>
+        </div>
+      </section>
+
+      <div id="workspace" hidden>
+        <section class="admin-view is-active" data-view-panel="dashboard">
+          <div class="view-heading"><div><p class="eyebrow">Control centre</p><h1>SDS Review Dashboard</h1></div><button class="secondary-action" data-refresh="dashboard" type="button">Refresh</button></div>
+          <div id="dashboardCards" class="metric-grid"></div>
+          <div class="panel"><h2>Recent activity</h2><div id="recentTable"></div></div>
+        </section>
+
+        <section class="admin-view" data-view-panel="upload" hidden>
+          <div class="view-heading"><div><p class="eyebrow">Intake</p><h1>SDS Upload</h1></div></div>
+          <form id="uploadForm" class="panel upload-panel">
+            <label class="file-drop" for="pdfInput">
+              <strong>Select an original SDS PDF</strong>
+              <span>The original filename and SHA-256 hash are retained permanently. Maximum 15 MB.</span>
+              <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf" required>
+            </label>
+            <button id="uploadButton" class="primary-action" type="submit">Upload and extract</button>
+          </form>
+          <div id="uploadResult" class="result-message" hidden></div>
+        </section>
+
+        <section class="admin-view" data-view-panel="queue" hidden>
+          <div class="view-heading"><div><p class="eyebrow">Processing</p><h1>SDS Parsing Queue</h1></div><button class="secondary-action" data-refresh="queue" type="button">Refresh</button></div>
+          <div class="panel"><div id="queueTable"></div></div>
+        </section>
+
+        <section class="admin-view" data-view-panel="review" hidden>
+          <div class="view-heading"><div><p class="eyebrow">EHS control</p><h1>SDS Review and Approval</h1></div><button class="secondary-action" data-refresh="review" type="button">Refresh</button></div>
+          <div class="review-layout">
+            <div class="panel review-list-panel"><div id="reviewList"></div></div>
+            <form id="reviewForm" class="panel review-form" hidden>
+              <div class="review-header"><div><span id="reviewStatus" class="status-badge"></span><h2 id="reviewTitle">Review document</h2><p id="reviewOriginal"></p></div><button id="openOriginalButton" class="secondary-action" type="button">Open original PDF</button></div>
+              <div id="reviewWarnings" class="warning-box" hidden></div>
+              <div id="reviewFields" class="form-grid"></div>
+              <label>Review comment<textarea id="reviewComment" rows="3" placeholder="Reason for edit, approval, rejection, or re-extraction"></textarea></label>
+              <div class="action-row">
+                <button id="saveReviewButton" class="secondary-action" type="button">Save edits</button>
+                <button id="reextractButton" class="secondary-action" type="button">Request re-extraction</button>
+                <button id="duplicateButton" class="secondary-action" type="button">Mark duplicate</button>
+                <button id="archiveButton" class="secondary-action" type="button">Archive</button>
+                <button id="rejectButton" class="danger-action" type="button">Reject</button>
+                <button id="approveButton" class="primary-action" type="button">Approve and rename</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="admin-view" data-view-panel="master" hidden>
+          <div class="view-heading"><div><p class="eyebrow">Controlled records</p><h1>SDS Master Register</h1></div><button class="secondary-action" data-refresh="master" type="button">Refresh</button></div>
+          <div class="panel"><div class="table-toolbar"><input id="masterSearch" type="search" placeholder="Search product or original filename"><select id="masterStatus"><option value="">All statuses</option></select><button id="masterSearchButton" class="secondary-action" type="button">Search</button></div><div id="masterTable"></div></div>
+        </section>
+
+        <section class="admin-view" data-view-panel="duplicates" hidden>
+          <div class="view-heading"><div><p class="eyebrow">Document control</p><h1>SDS Duplicate Checker</h1></div><button class="secondary-action" data-refresh="duplicates" type="button">Refresh</button></div>
+          <div class="panel"><p class="panel-intro">Exact SHA-256 matches and metadata-level duplicate candidates appear here. EHS must choose the controlling record.</p><div id="duplicateTable"></div></div>
+        </section>
+
+        <section class="admin-view" data-view-panel="detail" hidden>
+          <div class="view-heading"><div><p class="eyebrow">Audit record</p><h1>SDS Detail Page</h1></div></div>
+          <div id="detailContent"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="adminToast" class="admin-toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

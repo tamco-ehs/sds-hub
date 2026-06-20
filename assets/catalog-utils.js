@@ -15,10 +15,12 @@ export function isValidDocument(document) {
   const requiredStrings = ["id", "name", "file", "department"];
   if (requiredStrings.some((key) => typeof document[key] !== "string" || !document[key].trim())) return false;
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(document.id)) return false;
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*\.pdf$/.test(document.file)) return false;
+  const legacyFilename = /^[a-z0-9]+(?:-[a-z0-9]+)*\.pdf$/.test(document.file);
+  const controlledFilename = /^[A-Za-z0-9][A-Za-z0-9._,'-]{0,190}\.pdf$/.test(document.file) && typeof document.pdfUrl === "string";
+  if (!legacyFilename && !controlledFilename) return false;
   if (document.revisionDate != null && document.revisionDate !== "" && !isIsoDate(document.revisionDate)) return false;
 
-  const optionalStrings = ["manufacturer", "productCode", "location", "language"];
+  const optionalStrings = ["manufacturer", "productCode", "location", "language", "pdfUrl"];
   if (optionalStrings.some((key) => document[key] != null && typeof document[key] !== "string")) return false;
   if (document.documentType != null && !["SDS", "TDS", "Unverified"].includes(document.documentType)) return false;
   if (document.hazards != null && (!Array.isArray(document.hazards) || document.hazards.some((item) => typeof item !== "string"))) return false;
@@ -48,6 +50,7 @@ export function sanitizeCatalog(documents) {
       productCode: document.productCode?.trim() || "",
       location: document.location?.trim() || "",
       language: document.language?.trim() || "",
+      pdfUrl: document.pdfUrl?.trim() || "",
       hazards: Object.freeze((document.hazards || []).map((item) => item.trim()).filter(Boolean))
     }))
     .sort((left, right) => collator.compare(left.name, right.name));

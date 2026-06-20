@@ -1,5 +1,7 @@
 # Deployment Guide — from local to live (with AI)
 
+> The production upload, extraction, EHS review, Supabase, and GitHub Release workflow is documented in `SDS-INTAKE-DEPLOYMENT.md`. That guide supersedes the legacy Cloudflare proxy instructions below.
+
 This walks you all the way from the project on your PC to a public SDS site with
 the optional Gemini assistant. Follow the parts **in order**. The site works fully
 without AI, so Parts 1–2 already give your company a usable SDS library; Parts 3–5
