@@ -86,4 +86,3 @@ export function pickEditableMetadata(input: Record<string, unknown>): Extraction
   metadata.is_likely_sds = Boolean(input?.is_likely_sds ?? true);
   return extractionSchema.parse(metadata);
 }
-
