@@ -1,0 +1,19 @@
+name = "sds-ai-proxy"
+main = "src/index.js"
+compatibility_date = "2026-06-20"
+
+[vars]
+# Exact public origin of the GitHub Pages site. Separate multiple origins with commas.
+ALLOWED_ORIGIN = "https://OWNER.github.io"
+# Exact public URL of the deployed catalog JSON.
+SDS_CATALOG_URL = "https://OWNER.github.io/REPOSITORY/data/sds-data.json"
+GEMINI_MODEL = "gemini-2.5-flash"
+
+[[ratelimits]]
+name = "AI_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
+# Add secrets with the CLI; never write their values here:
+#   npx wrangler secret put GEMINI_API_KEY
+#   npx wrangler secret put RATE_LIMIT_SALT

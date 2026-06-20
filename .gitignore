@@ -1,0 +1,10 @@
+dist/
+node_modules/
+worker/node_modules/
+worker/.wrangler/
+worker/wrangler.toml
+*.log
+.DS_Store
+Thumbs.db
+data/onboarding-report.json
+data/enrichment-report.json

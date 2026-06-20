@@ -1,0 +1,190 @@
+# Digital SDS Hub
+
+A production-oriented, serverless Safety Data Sheet catalog for GitHub Pages. The static application keeps the manufacturer's approved PDF as the primary source, works on phones and desktops, supports stable QR-code routes, and can store verified PDFs for deliberate offline use.
+
+The catalog is intentionally empty. No legal SDS content is fabricated or bundled. Add approved manufacturer PDFs before facility release.
+
+## What is included
+
+- Accessible, responsive SDS search and department filtering
+- Stable `?chemical=<id>` and `?dept=<department>` QR routes
+- Defensive catalog validation and safe DOM rendering
+- Explicit, signature-checked offline PDF storage
+- Network-first service worker behavior for safety-critical data and PDFs
+- Content Security Policy with AI disabled by default
+- Optional Cloudflare Worker proxy that grounds Gemini responses in the selected official PDF
+- Automated tests, catalog/PDF validation, production build, and GitHub Pages deployment workflow
+
+## Local verification
+
+Node.js 20 or newer is required for validation and tests. The application itself has no runtime package dependencies.
+
+```powershell
+npm test
+npm run build
+python -m http.server 4173 -d dist
+```
+
+Then open `http://localhost:4173/`. Do not test through `file://`; service workers, JSON loading, and offline storage require HTTP or HTTPS.
+
+## Add an approved SDS
+
+1. Obtain the current SDS from the manufacturer or approved supplier.
+2. Verify product identity, language, revision date, and completeness.
+3. Save it under `/pdfs/` with a versioned filename such as `wd40-lubricant-2026-04-15.pdf`.
+4. Add a record to `data/sds-data.json`:
+
+```json
+{
+  "id": "wd-40-lubricant",
+  "name": "WD-40 Lubricant",
+  "file": "wd40-lubricant-2026-04-15.pdf",
+  "department": "Maintenance",
+  "revisionDate": "2026-04-15",
+  "manufacturer": "Manufacturer name from SDS",
+  "productCode": "Product identifier from SDS",
+  "location": "Approved work area",
+  "language": "English",
+  "hazards": ["Hazard tag verified from SDS"]
+}
+```
+
+5. Update the catalog-level `updatedAt` date.
+6. Run `npm test` and `npm run validate:release`.
+7. Complete a second-person content review before merging.
+
+## Batch onboarding without Codex
+
+The public website does not parse or rename uploads. GitHub Pages is static and cannot write files back to the repository. Instead, the included administrator command performs local, reviewable onboarding.
+
+Install its PDF-reading dependencies once:
+
+```powershell
+python -m pip install -r scripts/requirements-admin.txt
+```
+
+For scanned or image-only PDFs, also install the Tesseract OCR application and ensure the `tesseract` executable is available on `PATH`. Text-based PDFs work without Tesseract. The scanner prioritizes labelled Section 1 fields such as `Product name`, `Trade Name`, `Product identifier`, and `Material name`; filenames are only a fallback.
+
+Copy new PDFs into `/pdfs/`, then scan without changing anything:
+
+```powershell
+npm.cmd run onboard:scan
+```
+
+Review `data/onboarding-report.json`. It contains the proposed product names, safe filenames, extracted revision dates, document types, and duplicate list. When the proposals are acceptable, apply them:
+
+```powershell
+npm.cmd run onboard:apply -- --department "Unassigned"
+npm.cmd test
+npm.cmd run validate:release
+npm.cmd run build
+```
+
+The onboarding command never deletes PDFs. Exact duplicate copies are moved to `pdfs/archive/duplicates/`. Documents that cannot be named are moved to `pdfs/incoming-review/`. Filename-derived names, missing revision dates, `Unassigned` departments, TDS files, and documents labelled `Unverified` require human review before facility release.
+
+Validation rejects unsafe IDs and paths, duplicate IDs/files, unknown fields, missing PDFs, non-PDF file signatures, and unregistered PDF files.
+
+## Enrich missing metadata from existing PDFs
+
+`onboard:scan` only inspects new files. To recover missing revision dates and
+manufacturers from already-registered documents (using the PDF text layer and,
+for scanned pages, OCR), run the enrichment scanner:
+
+```powershell
+npm.cmd run enrich:scan
+```
+
+Review `data/enrichment-report.json`. Each date proposal records the exact source
+text and a confidence level. `enrich:apply` fills **only empty fields** and **only
+high-confidence proposals** (revision dates from a clear revision/issue label, plus
+manufacturers). It never overwrites a value a person already set, never auto-applies
+an ambiguous `DD/MM` date, and never edits hazards or product names.
+
+```powershell
+npm.cmd run enrich:apply
+npm.cmd test
+```
+
+Low-confidence date proposals (ambiguous `DD/MM` ordering, month-only dates) remain
+in the report for a person to confirm and enter manually. The OCR fallback requires
+the Tesseract application; the scanner locates it automatically in the standard
+Windows install path, so no `PATH` change is needed after installing it.
+
+## Configure the public site
+
+Edit `assets/config.js`. This file is public and must never contain credentials.
+
+```javascript
+window.SDS_CONFIG = Object.freeze({
+  siteName: "Digital SDS Hub",
+  facilityName: "Example Facility",
+  emergencyLabel: "Open emergency guidance",
+  emergencyHref: "https://example.org/emergency",
+  aiEnabled: false,
+  aiProxyUrl: "",
+  maxQuestionLength: 500
+});
+```
+
+If `emergencyHref` contains internal or sensitive information, do not publish it through a public GitHub Pages repository.
+
+## Deploy the static site
+
+1. Create a GitHub repository and use `main` as the protected release branch.
+2. In **Settings > Pages**, set **Source** to **GitHub Actions**.
+3. Push the reviewed change to `main`.
+4. Confirm the **Validate and deploy SDS Hub** workflow succeeds.
+5. Test the live site, each changed PDF, representative QR routes, and the offline procedure on a worker device.
+
+The workflow publishes only `dist/`; development scripts, the blueprint, and the optional proxy source are excluded from the public Pages artifact.
+
+## Optional Gemini proxy
+
+AI is deliberately disabled in the static application. A production browser must never receive the Gemini credential.
+
+The reference proxy under `worker/`:
+
+- allows only configured site origins;
+- validates the chemical ID against the live approved catalog;
+- fetches and verifies the selected official PDF itself;
+- supplies that PDF to Gemini as the only safety source;
+- applies Cloudflare's rate-limit binding;
+- hashes the client IP before using it as a rate-limit key;
+- limits request and PDF size, model output, and upstream duration; and
+- returns safe, non-cached errors without exposing credentials or provider responses.
+
+### Proxy deployment
+
+1. Copy `worker/wrangler.example.toml` to `worker/wrangler.toml`.
+2. Set the exact `ALLOWED_ORIGIN` and `SDS_CATALOG_URL` values.
+3. From `worker/`, install the pinned project dependencies and add secrets:
+
+```powershell
+npm install
+npx wrangler secret put GEMINI_API_KEY
+npx wrangler secret put RATE_LIMIT_SALT
+npm run deploy
+```
+
+Use a long random value for `RATE_LIMIT_SALT`. Never store either secret in a file or repository.
+
+4. Set `aiEnabled: true` and `aiProxyUrl` to the deployed `https://.../v1/ask` endpoint in `assets/config.js`.
+5. In `index.html`, add only the proxy's exact origin to the `connect-src` directive. For example:
+
+```text
+connect-src 'self' https://sds-ai-proxy.example.workers.dev
+```
+
+6. Re-run the full test/build/deploy process. Test success, quota rejection, timeout, invalid chemical ID, invalid PDF, and upstream failure.
+
+AI responses remain supplemental. The user interface always retains the official SDS link and shows a fail-safe message when AI is unavailable.
+
+## Release gate
+
+Before posting QR codes or directing workers to the system:
+
+```powershell
+npm run validate:release
+```
+
+Then complete the acceptance checklist in `Production Blueprint Serverless SDS.md`. A successful software build does not replace the facility safety manager's content approval or the tested emergency-access fallback.

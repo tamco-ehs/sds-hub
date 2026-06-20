@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#102a43">
+  <meta name="description" content="Immediate access to approved workplace Safety Data Sheets.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; frame-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; upgrade-insecure-requests">
+  <title>Digital SDS Hub</title>
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./assets/styles.css">
+  <script src="./assets/config.js" defer></script>
+  <script type="module" src="./assets/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to SDS search</a>
+
+  <header class="site-header">
+    <div class="header-accent" aria-hidden="true"></div>
+    <div class="shell header-inner">
+      <a class="brand" href="./" aria-label="Digital SDS Hub home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" role="img">
+            <path d="M24 3.5 44 40H4L24 3.5Z" fill="currentColor"/>
+            <path d="M24 15v13" stroke="#102a43" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="24" cy="34" r="2.6" fill="#102a43"/>
+          </svg>
+        </span>
+        <span>
+          <strong id="siteName">Digital SDS Hub</strong>
+          <small id="facilityName">Facility safety library</small>
+        </span>
+      </a>
+      <div class="header-status" title="Official SDS library">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Official documents</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="emergency-strip" role="note">
+    <div class="shell emergency-inner">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2 2 21h20L12 2Zm0 6v6m0 3.5v.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p><strong>Active emergency?</strong> Follow the site emergency plan. Do not wait for AI assistance.</p>
+      <a id="emergencyLink" class="emergency-link" href="#" hidden>Emergency guidance</a>
+    </div>
+  </div>
+
+  <main id="main-content" class="shell main-layout" tabindex="-1">
+    <section class="catalog-panel" aria-labelledby="catalog-heading">
+      <div class="hero-copy">
+        <p class="eyebrow">Safety data sheet library</p>
+        <h1 id="catalog-heading">Find the right SDS. Fast.</h1>
+        <p>Search approved manufacturer documents by product, code, manufacturer, or department.</p>
+      </div>
+
+      <div class="search-card">
+        <label for="searchInput">Search chemicals and products</label>
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="m16.5 16.5 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <input id="searchInput" type="search" inputmode="search" autocomplete="off" spellcheck="false" placeholder="e.g. acetone, lubricant, product code" aria-describedby="searchHint">
+          <button id="clearSearch" class="icon-button" type="button" aria-label="Clear search" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <p id="searchHint" class="field-hint">Results update as you type.</p>
+      </div>
+
+      <div class="filter-section" aria-labelledby="department-heading">
+        <div class="section-row">
+          <h2 id="department-heading">Department</h2>
+          <button id="resetFilters" class="text-button" type="button" hidden>Reset filters</button>
+        </div>
+        <div id="departmentFilters" class="filter-list" role="group" aria-label="Filter by department"></div>
+      </div>
+
+      <div class="results-section" aria-labelledby="results-heading">
+        <div class="section-row results-heading-row">
+          <h2 id="results-heading">Available documents</h2>
+          <span id="resultsCount" class="count-badge" aria-live="polite">Loading...</span>
+        </div>
+
+        <div id="loadingState" class="state-card" role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          <p>Loading the approved SDS catalog...</p>
+        </div>
+
+        <div id="errorState" class="state-card state-card--danger" hidden>
+          <span class="state-icon" aria-hidden="true">!</span>
+          <div>
+            <h3>The digital catalog could not load</h3>
+            <p>Use the site's approved backup SDS source and notify the system administrator.</p>
+            <button id="retryLoad" class="secondary-button" type="button">Try again</button>
+          </div>
+        </div>
+
+        <div id="emptyCatalogState" class="state-card" hidden>
+          <span class="state-icon state-icon--neutral" aria-hidden="true">0</span>
+          <div>
+            <h3>No SDS documents are published yet</h3>
+            <p>Use the approved physical or offline SDS library. Administrators must add verified manufacturer PDFs before this station is released.</p>
+          </div>
+        </div>
+
+        <div id="noResultsState" class="state-card" hidden>
+          <span class="state-icon state-icon--neutral" aria-hidden="true">?</span>
+          <div>
+            <h3>No matching document</h3>
+            <p>Check the spelling or clear the department filter. If the product is still missing, use the backup SDS library and report the gap.</p>
+          </div>
+        </div>
+
+        <ul id="resultsList" class="results-list" aria-label="Safety Data Sheet search results"></ul>
+      </div>
+    </section>
+
+    <aside class="detail-column" aria-label="Selected Safety Data Sheet">
+      <section id="detailPlaceholder" class="detail-card detail-placeholder">
+        <div class="document-illustration" aria-hidden="true">
+          <svg viewBox="0 0 120 120">
+            <path d="M31 12h39l20 20v76H31z" fill="#fff" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M70 12v21h20" fill="#e8f1f8" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M44 55h34M44 68h34M44 81h23" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h2>Select a product</h2>
+        <p>Choose a result to open its official SDS, check revision details, or store an offline copy on this device.</p>
+      </section>
+
+      <section id="detailPanel" class="detail-card" aria-labelledby="detailTitle" hidden>
+        <div class="detail-topline">
+          <span id="detailDepartment" class="department-tag"></span>
+          <span id="detailRevision" class="revision-label"></span>
+        </div>
+        <h2 id="detailTitle"></h2>
+        <dl class="metadata-list">
+          <div id="manufacturerRow">
+            <dt>Manufacturer</dt>
+            <dd id="detailManufacturer"></dd>
+          </div>
+          <div id="productCodeRow">
+            <dt>Product code</dt>
+            <dd id="detailProductCode"></dd>
+          </div>
+          <div id="locationRow">
+            <dt>Work area</dt>
+            <dd id="detailLocation"></dd>
+          </div>
+        </dl>
+        <div id="hazardTags" class="hazard-tags" aria-label="Hazard tags"></div>
+
+        <a id="pdfLink" class="primary-button" href="#" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 2h8l4 4v16H6zM14 2v5h5M9 13h6M9 17h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Open official SDS PDF</span>
+        </a>
+
+        <button id="previewButton" class="secondary-button full-width" type="button" aria-expanded="false" aria-controls="pdfPreviewPanel">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <span>Preview PDF on this page</span>
+        </button>
+
+        <div id="pdfPreviewPanel" class="pdf-preview" hidden>
+          <div class="pdf-preview-heading">
+            <strong>Official SDS preview</strong>
+            <span>Use “Open official SDS PDF” if your browser cannot display the preview.</span>
+          </div>
+          <iframe id="pdfViewer" title="Official Safety Data Sheet PDF preview" loading="lazy"></iframe>
+        </div>
+
+        <button id="offlineButton" class="secondary-button full-width" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Store offline on this device</span>
+        </button>
+        <p id="offlineStatus" class="offline-status" aria-live="polite">Offline copies are device-specific and may be cleared. Keep the site-approved backup available.</p>
+
+        <div id="aiPanel" class="ai-panel" hidden>
+          <div class="ai-heading">
+            <span class="ai-mark" aria-hidden="true">AI</span>
+            <div>
+              <h3>Supplemental safety assistant</h3>
+              <p>Not a replacement for the official SDS or emergency procedures.</p>
+            </div>
+          </div>
+          <label for="aiQuestion">Ask about this product</label>
+          <textarea id="aiQuestion" rows="3" maxlength="500" placeholder="Ask about PPE, first aid, handling, or spills"></textarea>
+          <div class="ai-actions">
+            <span id="questionCounter">0 / 500</span>
+            <button id="askAiButton" class="ai-button" type="button">Ask assistant</button>
+          </div>
+          <div id="aiResponse" class="ai-response" aria-live="polite" hidden></div>
+        </div>
+      </section>
+
+      <section class="authority-note" aria-label="Important safety notice">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3 3 7v5c0 5.2 3.5 8.5 9 10 5.5-1.5 9-4.8 9-10V7l-9-4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="m8.5 12 2.2 2.2 4.8-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p><strong>The manufacturer's PDF is authoritative.</strong> Report missing, incorrect, or unreadable documents to the facility safety manager immediately.</p>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <p>Digital SDS Hub <span aria-hidden="true">&middot;</span> Immediate access to approved safety documents</p>
+      <p id="catalogUpdated">Catalog status unavailable</p>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <noscript>
+    <div class="noscript-notice" role="alert">
+      JavaScript is unavailable. Use the facility's approved physical or offline SDS library for immediate access.
+    </div>
+  </noscript>
+</body>
+</html>

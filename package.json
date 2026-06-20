@@ -1,0 +1,22 @@
+{
+  "name": "serverless-digital-sds-hub",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check assets/app.js && node --check assets/catalog-utils.js && node --check service-worker.js && node --check worker/src/index.js",
+    "test": "npm run check && node --test tests/*.test.mjs && node scripts/validate.mjs",
+    "validate": "node scripts/validate.mjs",
+    "validate:release": "node scripts/validate.mjs --require-data",
+    "build": "node scripts/validate.mjs && node scripts/build.mjs",
+    "onboard:scan": "python scripts/onboard_pdfs.py",
+    "onboard:apply": "python scripts/onboard_pdfs.py --apply",
+    "enrich:scan": "python scripts/enrich_metadata.py",
+    "enrich:apply": "python scripts/enrich_metadata.py --apply",
+    "dept:export": "python scripts/departments.py export",
+    "dept:apply": "python scripts/departments.py apply"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

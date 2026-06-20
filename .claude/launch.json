@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sds-dist",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "4175", "-d", "dist"],
+      "port": 4175
+    }
+  ]
+}

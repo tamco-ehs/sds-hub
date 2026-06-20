@@ -1,0 +1,4 @@
+pypdf==6.10.0
+pypdfium2==5.9.0
+pytesseract==0.3.13
+python-dateutil==2.9.0.post0

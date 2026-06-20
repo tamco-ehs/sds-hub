@@ -1,0 +1,19 @@
+{
+  "name": "Digital SDS Hub",
+  "short_name": "SDS Hub",
+  "description": "Immediate access to approved workplace Safety Data Sheets.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7fa",
+  "theme_color": "#102a43",
+  "icons": [
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
