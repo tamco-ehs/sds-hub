@@ -93,7 +93,8 @@ if (catalog) {
     const unregisteredPdfs = files
       .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".pdf") && !seenFiles.has(entry.name))
       .map((entry) => entry.name);
-    if (unregisteredPdfs.length) errors.push(`Unregistered PDF files: ${unregisteredPdfs.join(", ")}.`);
+    // Loose PDFs in pdfs/ are staging material (use admin upload, or register in sds-data.json). The build ignores them, so this is a warning, not a release-blocker.
+    if (unregisteredPdfs.length) warnings.push(`${unregisteredPdfs.length} unregistered PDF file(s) in pdfs/ are not published (upload via admin, or register in sds-data.json): ${unregisteredPdfs.join(", ")}.`);
   }
 }
 
