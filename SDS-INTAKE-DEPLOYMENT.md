@@ -17,16 +17,16 @@ The existing reviewed GitHub Pages catalog remains the emergency-safe fallback i
 - Project reference: `jxvsxwsmfycvewxeyxmp`
 - Edge Function: `sds-api`
 - API base: `https://jxvsxwsmfycvewxeyxmp.supabase.co/functions/v1/sds-api`
-- GitHub repository: `izzulwork1/sds-hub`
+- GitHub repository: `tamco-ehs/sds-hub`
 - Private intake release tag: `sds-intake-originals`
 - Approved release tag: `sds-approved`
 
 ## Security model
 
 - `GEMINI_API_KEY`, `GITHUB_TOKEN`, and the emergency-only `ADMIN_API_TOKEN` are encrypted Supabase secrets. They must never be placed in HTML, JavaScript, Git commits, screenshots, or QR codes.
-- The GitHub token is fine-grained, restricted to `izzulwork1/sds-hub`, and requires only Contents read/write access.
+- The GitHub token is fine-grained, restricted to `tamco-ehs/sds-hub`, and requires only Contents read/write access.
 - All controlled tables have Row Level Security enabled. Browser roles have no direct table access; the Edge Function validates the Supabase access token, loads `admin_users`, and uses the server-side service role for data access.
-- Every extraction finishes in **Needs Review**, including results with very high confidence.
+- Every extraction remains behind the existing **Needs Review** publication gate, but its additive review category distinguishes approval-only confirmation, quick check, full review, OCR review, duplicate/conflict, and replacement/error paths.
 - Original filenames, SHA-256 hashes, private source assets, extraction logs, and review actions are retained.
 - Existing approved assets are never overwritten. A filename collision must be resolved by EHS as corrected metadata or a duplicate.
 
@@ -34,9 +34,9 @@ The existing reviewed GitHub Pages catalog remains the emergency-safe fallback i
 
 1. Enable Email/Password in Supabase **Authentication > Providers**.
 2. In **Authentication > URL Configuration > Redirect URLs**, add BOTH of these. The forgot-password and invite flows silently fail to redirect otherwise:
-   - `https://izzulwork1.github.io/sds-hub/admin.html`
-   - `https://izzulwork1.github.io/sds-hub/reset-password.html`
-3. Invite the first user in **Authentication > Users** and redirect to `https://izzulwork1.github.io/sds-hub/admin.html`. The invite flow opens a required password-creation dialog before the workspace.
+   - `https://tamco-ehs.github.io/sds-hub/admin.html`
+   - `https://tamco-ehs.github.io/sds-hub/reset-password.html`
+3. Invite the first user in **Authentication > Users** and redirect to `https://tamco-ehs.github.io/sds-hub/admin.html`. The invite flow opens a required password-creation dialog before the workspace.
 4. Apply migrations, then add that Auth UUID in the SQL editor:
 
 ```sql
@@ -66,11 +66,11 @@ git push
 The required function secrets are:
 
 - `ADMIN_API_TOKEN`
-- `ALLOWED_ORIGIN=https://izzulwork1.github.io`
+- `ALLOWED_ORIGIN=https://tamco-ehs.github.io`
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL=gemini-2.5-flash`
 - `GITHUB_TOKEN`
-- `GITHUB_REPOSITORY=izzulwork1/sds-hub`
+- `GITHUB_REPOSITORY=tamco-ehs/sds-hub`
 - `GITHUB_INTAKE_RELEASE_TAG=sds-intake-originals`
 - `GITHUB_APPROVED_RELEASE_TAG=sds-approved`
 
@@ -78,7 +78,7 @@ Use `npx.cmd supabase secrets list --project-ref jxvsxwsmfycvewxeyxmp` to verify
 
 ## Administrator workflow
 
-Open `https://izzulwork1.github.io/sds-hub/admin.html` and sign in using the authorized user's email and password. The workspace remains hidden until the Edge Function confirms an active `admin_users` row. The displayed reviewer identity and audit actor come from that row, not from browser input.
+Open `https://tamco-ehs.github.io/sds-hub/admin.html` and sign in using the authorized user's email and password. The workspace remains hidden until the Edge Function confirms an active `admin_users` row. The displayed reviewer identity and audit actor come from that row, not from browser input.
 
 The `ADMIN_API_TOKEN` is retained only for emergency API recovery and is not used or exposed by the normal browser workflow.
 
@@ -89,6 +89,14 @@ The `ADMIN_API_TOKEN` is retained only for emergency API recovery and is not use
 - Unsafe `../`, absolute, backslash traversal, or drive-letter paths reject the ZIP.
 - The workflow design supports a 100 MB ceiling, but this Supabase Edge deployment safely rejects ZIP requests above 20 MB because larger synchronous decompression is not reliable in the hosted runtime. Split large collections into smaller ZIP batches.
 - ZIP extraction is regex/text-first and leaves every accepted PDF in **Needs Review**. EHS can request Gemini re-extraction for an individual record.
+
+## Risk-based review metadata
+
+Migration `20260621150000_sds_risk_review_categories.sql` is additive and must be applied before deploying the matching Edge Function/frontend. It does not change existing statuses or approved records. It adds `risk_level`, `review_decision`, concise `review_reasons`/`evidence_snippets`, extraction conflicts, AI verification state, approved-match state, and a pre-screen timestamp.
+
+The Edge Function applies rules first. Clear high-confidence low/medium-risk records skip Gemini; OCR, missing/uncertain identity, conflicts, high risk, or moderate confidence may use Gemini when configured. Gemini remains advisory and cannot approve. All new public publication still requires `EHS_ADMIN` approval.
+
+The separate GitHub-hosted bulk scanner and artifact reports are documented under **GitHub Actions bulk SDS pre-screen** in `README.md`. Its `GEMINI_API_KEY` is a GitHub Actions secret, separate from the identically named encrypted Supabase Function secret.
 
 ## Acceptance test
 

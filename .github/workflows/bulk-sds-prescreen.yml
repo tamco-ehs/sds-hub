@@ -1,0 +1,123 @@
+name: Bulk SDS pre-screen
+
+on:
+  workflow_dispatch:
+    inputs:
+      ai_verify_mode:
+        description: Selective AI verification mode
+        required: true
+        default: selective
+        type: choice
+        options:
+          - off
+          - selective
+          - all
+      force_rescan:
+        description: Ignore the hash cache and rescan every PDF
+        required: true
+        default: false
+        type: boolean
+      ai_max_calls:
+        description: Maximum Gemini verification calls in this run
+        required: true
+        default: "25"
+        type: string
+  pull_request:
+    paths:
+      - "pdfs/**/*.pdf"
+      - "data/sds-data.json"
+      - "scripts/bulk_prescreen.py"
+      - "scripts/onboard_pdfs.py"
+      - "scripts/enrich_metadata.py"
+      - "scripts/tests/test_bulk_prescreen.py"
+      - "scripts/requirements-admin.txt"
+      - ".github/workflows/bulk-sds-prescreen.yml"
+  push:
+    branches: [main]
+    paths:
+      - "pdfs/**/*.pdf"
+      - "data/sds-data.json"
+      - "scripts/bulk_prescreen.py"
+      - "scripts/onboard_pdfs.py"
+      - "scripts/enrich_metadata.py"
+      - "scripts/tests/test_bulk_prescreen.py"
+      - "scripts/requirements-admin.txt"
+      - ".github/workflows/bulk-sds-prescreen.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bulk-sds-prescreen-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prescreen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AI_VERIFY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.ai_verify_mode || 'selective' }}
+      AI_MAX_CALLS: ${{ github.event_name == 'workflow_dispatch' && inputs.ai_max_calls || '25' }}
+      FORCE_RESCAN: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rescan || 'false' }}
+      OCR_MAX_PAGES: "3"
+      NATIVE_MAX_PAGES: "40"
+      AI_EVIDENCE_MAX_CHARS: "3000"
+      GEMINI_MODEL: gemini-2.5-flash
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements-admin.txt
+
+      - name: Install PDF and OCR system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+
+      - name: Install scanner dependencies
+        run: python -m pip install --requirement scripts/requirements-admin.txt
+
+      - name: Restore prior hash and AI result cache
+        uses: actions/cache@v4
+        with:
+          path: data/.bulk-prescreen-cache.json
+          key: bulk-prescreen-v1-${{ runner.os }}-${{ hashFiles('pdfs/**/*.pdf', 'scripts/bulk_prescreen.py', 'scripts/onboard_pdfs.py', 'scripts/enrich_metadata.py') }}
+          restore-keys: |
+            bulk-prescreen-v1-${{ runner.os }}-
+
+      - name: Run rule-first SDS pre-screen
+        shell: bash
+        run: |
+          args=()
+          if [[ "$FORCE_RESCAN" == "true" ]]; then
+            args+=(--force)
+          fi
+          python scripts/bulk_prescreen.py \
+            --ai-mode "$AI_VERIFY_MODE" \
+            --ai-max-calls "$AI_MAX_CALLS" \
+            --ocr-pages "$OCR_MAX_PAGES" \
+            --native-pages "$NATIVE_MAX_PAGES" \
+            --evidence-max-chars "$AI_EVIDENCE_MAX_CHARS" \
+            "${args[@]}"
+
+      - name: Test pre-screen rules and report schema
+        run: python -m unittest discover -s scripts/tests -p "test_bulk_prescreen.py" -v
+
+      - name: Upload EHS pre-screen reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulk-sds-prescreen-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            data/bulk-prescreen-report.json
+            data/bulk-review-queue.json
+            data/bulk-ai-verification-log.json
+            data/bulk-scan-summary.json

@@ -82,3 +82,17 @@ body{background:var(--canvas)}
   .admin-main{padding:16px 12px 40px}
   .upload-stepper .step{min-width:0;flex:1 1 46%}
 }
+
+/* Risk-based review queue */
+.review-group{margin:0 0 16px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.review-group:last-child{border-bottom:0}
+.review-group-heading{position:sticky;top:-1px;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;padding:8px 9px;color:var(--navy-900);background:#f4f7fb;border-radius:8px;font-size:.68rem}
+.review-group-heading span{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:21px;padding:0 7px;color:#fff;background:var(--navy-800);border-radius:999px;font-size:.62rem}
+.review-group-error_needs_review .review-group-heading,.review-group-not_sds_or_replace_file .review-group-heading{color:var(--red);background:var(--red-pale)}
+.review-group-ocr_review_required .review-group-heading,.review-group-full_review_required .review-group-heading,.review-group-conflict_duplicate .review-group-heading{color:#704c00;background:var(--amber-pale)}
+.review-group-auto_prescreen_pass .review-group-heading,.review-group-no_review_required_existing_unchanged .review-group-heading{color:var(--green);background:var(--green-pale)}
+.evidence-summary{display:grid;gap:9px;margin:0 0 4px;padding:14px;background:#f7f9fb;border:1px solid var(--line);border-radius:10px}
+.evidence-row{display:grid;grid-template-columns:110px 1fr;gap:10px;font-size:.7rem}
+.evidence-row strong{color:var(--navy-800)}
+.evidence-row span{color:var(--muted);overflow-wrap:anywhere}
+@media(max-width:650px){.evidence-row{grid-template-columns:1fr;gap:2px}}

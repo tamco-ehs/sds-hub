@@ -13,8 +13,8 @@ A production-oriented Safety Data Sheet catalog for GitHub Pages. The static app
 - Supabase Edge Function for server-side intake and structured Gemini extraction
 - Supabase Auth email/password admin intake at `admin.html`, with `EHS_ADMIN` / `EHS_REVIEWER` authorization
 - Actor-based Postgres audit history, soft archive/delete/restore, and GitHub Release asset storage
-- Single-PDF and controlled ZIP batch intake (up to 100 PDFs; every document still requires EHS review)
-- Server-side PDF text extraction, regex-first metadata detection, and optional Gemini JSON fallback
+- Single-PDF and controlled ZIP batch intake (up to 100 PDFs; every publication still requires controlled approval)
+- Rule-first PDF extraction with risk-based review categories and selective Gemini JSON verification
 - EHS approval, duplicate handling, and controlled approved filename generation
 - Automated tests, catalog/PDF validation, production build, and GitHub Pages deployment workflow
 
@@ -113,6 +113,42 @@ in the report for a person to confirm and enter manually. The OCR fallback requi
 the Tesseract application; the scanner locates it automatically in the standard
 Windows install path, so no `PATH` change is needed after installing it.
 
+## GitHub Actions bulk SDS pre-screen
+
+The **Bulk SDS pre-screen** workflow scans root-level `/pdfs/*.pdf` files on a GitHub-hosted Ubuntu runner, so the full scan does not depend on an administrator's PC. It is rule-first: native PDF text, bounded Tesseract OCR, labelled-field regex, section detection, hashing, duplicate checks, date checks, confidence scoring, and risk rules all run before Gemini is considered.
+
+Run it manually:
+
+1. Open the repository's **Actions** tab.
+2. Select **Bulk SDS pre-screen**.
+3. Choose **Run workflow**.
+4. Keep `selective` for normal use. Use `off` for rules/OCR only, and reserve `all` for deliberate troubleshooting.
+5. Leave the default AI call ceiling at 25 unless a controlled batch needs a different limit. Enable **force rescan** only when scanner rules changed or a cached result must be rebuilt.
+
+The completed run uploads a 30-day artifact named `bulk-sds-prescreen-<run number>` containing:
+
+- `bulk-prescreen-report.json` — per-file fields, confidence, risk, sources, and short evidence
+- `bulk-review-queue.json` — records grouped by review decision
+- `bulk-ai-verification-log.json` — advisory AI usage/results without prompts or secrets
+- `bulk-scan-summary.json` — scanned, cached, OCR, AI, review-category, and error totals
+
+No full extracted SDS text is written to these reports. The cache is keyed by SHA-256, so unchanged files reuse their prior rule/AI result. OCR defaults to three pages, evidence sent to Gemini is capped, Gemini output is small structured JSON, and `AI_MAX_CALLS` defaults to 25. Missing keys, quota errors, timeouts, and provider failures do not fail the scan.
+
+To enable selective verification, create the secret in **Repository Settings > Secrets and variables > Actions > New repository secret** with the exact name `GEMINI_API_KEY`. Never add it to `assets/config.js`, workflow YAML, JSON reports, screenshots, or a commit. The workflow's repository permission is read-only and it never edits the approved catalog or PDFs.
+
+Review routing is advisory and never approves a document:
+
+- **Existing Unchanged** — same approved/hash-backed record with no new conflict; no repeat metadata review
+- **Prescreen Passed** — confidence at least 85, strong native text, identity/company plus Sections 2 and 8 present, low/medium risk, no conflict; approval-only confirmation
+- **Quick Check Required** — moderate confidence or a limited ambiguity with critical fields present
+- **Full Review Required** — high risk, confidence below 70, missing identity/company/Section 2/Section 8, revision/duplicate/AI conflict, or unclear type
+- **OCR Review Required** — scanned/image-only content needs visual confirmation against the manufacturer PDF
+- **Not SDS / Replace File** and **Error - Needs Review** — wrong/unreadable/corrupt material
+
+The scanner may propose enrichment for an empty manufacturer, revision date, or product code on an existing approved catalog row when evidence is clear and confidence is high. It never applies that proposal, overwrites manually verified data, changes hazards/department/location/name/status, renames approved files, deletes PDFs, or adds a new PDF to the public catalog. The manufacturer SDS remains the source of truth.
+
+Limits: OCR is intentionally page-bounded for runner cost, handwriting and poor scans can remain uncertain, the Actions cache may be evicted, and hash reuse proves unchanged bytes—not that an older SDS is still current. EHS must still review high-risk, OCR, changed, unclear, duplicate, conflicting, and incomplete documents. All public publication continues through the existing authenticated approval route.
+
 ## Configure the public site
 
 Edit `assets/config.js`. This file is public and must never contain credentials.
@@ -141,7 +177,7 @@ Only the Supabase publishable/anon key belongs in `assets/config.js`; it is inte
 
 1. In Supabase **Authentication > Providers**, enable Email/Password.
 2. Apply the database migrations before deploying the updated function.
-3. Invite the first user in **Authentication > Users** with the redirect URL set to `https://izzulwork1.github.io/sds-hub/admin.html`. The admin page will ask the invited user to create a password of at least 12 characters.
+3. Invite the first user in **Authentication > Users** with the redirect URL set to `https://tamco-ehs.github.io/sds-hub/admin.html`. The admin page will ask the invited user to create a password of at least 12 characters.
 4. Copy that user's UUID and register the first active administrator in the SQL editor:
 
 ```sql

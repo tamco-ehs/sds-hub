@@ -26,6 +26,20 @@ const DATE_BASIS_LABELS = {
   revision_date:"Revision date", issue_date:"Issue date", preparation_date:"Preparation date",
   establishment_date:"Establishment date", effective_date:"Effective date", print_date:"Print date (low confidence)"
 };
+const REVIEW_DECISION_LABELS = {
+  no_review_required_existing_unchanged:"Existing approved SDS — unchanged",
+  auto_prescreen_pass:"Pre-screen passed — approval only",
+  quick_check_required:"Quick EHS check",
+  full_review_required:"Full EHS review",
+  ocr_review_required:"OCR / visual review",
+  conflict_duplicate:"Duplicate / conflict review",
+  not_sds_or_replace_file:"Not SDS / replace file",
+  error_needs_review:"Processing error"
+};
+const REVIEW_DECISION_ORDER = [
+  "error_needs_review","not_sds_or_replace_file","ocr_review_required","conflict_duplicate",
+  "full_review_required","quick_check_required","auto_prescreen_pass","no_review_required_existing_unchanged"
+];
 const SECTION_TITLES = {
   1:"Identification",2:"Hazard identification",3:"Composition/ingredients",4:"First-aid measures",
   5:"Fire-fighting measures",6:"Accidental release",7:"Handling and storage",8:"Exposure controls/PPE",
@@ -269,15 +283,34 @@ async function loadReviewList() {
   const data = await api("/v1/admin/documents?status=Needs%20Review&limit=200");
   const documents = data.documents || [];
   if (!documents.length) { elements.reviewList.replaceChildren(emptyState("No documents currently need EHS review.")); elements.reviewForm.hidden = true; return; }
-  elements.reviewList.replaceChildren(...documents.map((record) => {
-    const button = node("button", { className:"review-item", type:"button" }, [
-      node("strong", { textContent:displayName(record) }),
-      node("span", { textContent:`${record.original_filename} · ${record.extraction_confidence || 0}% confidence` })
-    ]);
-    button.classList.toggle("is-active", record.id === state.selectedId);
-    button.addEventListener("click", () => openReview(record.id));
-    return button;
-  }));
+  const grouped = new Map();
+  documents.forEach((record) => {
+    const decision = REVIEW_DECISION_LABELS[record.review_decision] ? record.review_decision : "full_review_required";
+    if (!grouped.has(decision)) grouped.set(decision, []);
+    grouped.get(decision).push(record);
+  });
+  const groups = REVIEW_DECISION_ORDER.filter((decision) => grouped.has(decision)).map((decision) => {
+    const records = grouped.get(decision);
+    const section = node("section", { className:`review-group review-group-${decision}` });
+    section.append(node("div", { className:"review-group-heading" }, [
+      node("strong", { textContent:REVIEW_DECISION_LABELS[decision] }),
+      node("span", { textContent:String(records.length) })
+    ]));
+    records.forEach((record) => {
+      const risk = String(record.risk_level || "unknown").toUpperCase();
+      const company = record.manufacturer || record.supplier || "Manufacturer not detected";
+      const button = node("button", { className:"review-item", type:"button" }, [
+        node("strong", { textContent:displayName(record) }),
+        node("span", { textContent:`${company} · ${record.extraction_confidence || 0}% confidence · ${risk} risk` }),
+        node("span", { textContent:`${record.original_filename} · AI: ${formatCodeLabel(record.ai_verification_status || "not recorded")}` })
+      ]);
+      button.classList.toggle("is-active", record.id === state.selectedId);
+      button.addEventListener("click", () => openReview(record.id));
+      section.append(button);
+    });
+    return section;
+  });
+  elements.reviewList.replaceChildren(...groups);
   if (!state.selectedId || !documents.some((item) => item.id === state.selectedId)) await openReview(documents[0].id);
 }
 
@@ -293,10 +326,14 @@ function renderReviewForm(record) {
   const warnings = [
     record.ocr_required ? "PDF text was weak or image-only. OCR or visual verification is required." : "",
     record.possible_duplicate_flag ? `Possible duplicate${record.duplicate_of_id ? ` of ${record.duplicate_of_id}` : ""}.` : "",
-    ...(Array.isArray(record.date_detection_warnings) ? record.date_detection_warnings : []), record.review_required_reason || ""
+    ...(Array.isArray(record.date_detection_warnings) ? record.date_detection_warnings : []),
+    ...(Array.isArray(record.review_reasons) ? record.review_reasons : []),
+    ...(Array.isArray(record.extraction_conflicts) ? record.extraction_conflicts : []),
+    record.review_required_reason || ""
   ].filter(Boolean);
   elements.reviewWarnings.hidden = !warnings.length; elements.reviewWarnings.textContent = [...new Set(warnings)].join("\n");
-  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
+  const evidence = buildEvidenceSummary(record.evidence_snippets);
+  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
   elements.reviewComment.value = "";
 }
 
@@ -308,6 +345,10 @@ function buildValiditySummary(record) {
   card.append(node("span", { className:"review-summary-title", textContent:"SDS dates, validity & 16-section completeness" }));
   const grid = node("div", { className:"review-summary-grid" });
   grid.append(
+    summaryRow("Review category", REVIEW_DECISION_LABELS[record.review_decision] || "Legacy full review"),
+    summaryRow("Risk level", formatCodeLabel(record.risk_level || "unknown"), record.risk_level === "high"),
+    summaryRow("AI verification", formatCodeLabel(record.ai_verification_status || "Not recorded"), ["error","quota_exceeded","timeout","not_configured"].includes(record.ai_verification_status)),
+    summaryRow("Existing approved match", record.existing_catalog_match ? "Yes — unchanged hash" : "No"),
     summaryRow("Revision date", record.revision_date || "Not detected"), summaryRow("Issue date", record.issue_date || "Not detected"),
     summaryRow("Preparation date", record.preparation_date || "Not detected"), summaryRow("Establishment date", record.establishment_date || "Not detected"),
     summaryRow("Effective date", record.effective_date || "Not detected"), summaryRow("Print date", record.print_date || "Not detected", record.validity_date_basis === "print_date"),
@@ -319,6 +360,24 @@ function buildValiditySummary(record) {
     summaryRow("Missing sections", missingText, missing.length > 0)
   );
   card.append(grid); return card;
+}
+
+function buildEvidenceSummary(evidence) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
+  const entries = Object.entries(evidence).filter(([,value]) => String(value || "").trim());
+  if (!entries.length) return null;
+  const card = node("div", { className:"field-wide evidence-summary" });
+  card.append(node("span", { className:"review-summary-title", textContent:"Rule evidence (short excerpts only)" }));
+  entries.forEach(([label,value]) => card.append(node("div", { className:"evidence-row" }, [
+    node("strong", { textContent:formatCodeLabel(label) }),
+    node("span", { textContent:String(value) })
+  ])));
+  return card;
+}
+
+function formatCodeLabel(value) {
+  const text = String(value || "").replaceAll("_", " ").trim();
+  return text ? text.replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Unknown";
 }
 
 function summaryRow(label, value, danger = false) {

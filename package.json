@@ -14,6 +14,8 @@
     "onboard:apply": "python scripts/onboard_pdfs.py --apply",
     "enrich:scan": "python scripts/enrich_metadata.py",
     "enrich:apply": "python scripts/enrich_metadata.py --apply",
+    "prescreen:scan": "python scripts/bulk_prescreen.py",
+    "prescreen:test": "python -m unittest discover -s scripts/tests -p \"test_bulk_prescreen.py\"",
     "dept:export": "python scripts/departments.py export",
     "dept:apply": "python scripts/departments.py apply"
   },

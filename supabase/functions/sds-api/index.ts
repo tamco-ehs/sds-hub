@@ -1,7 +1,8 @@
-import { assessSdsText, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction, shouldUseGemini } from "../_shared/extraction.ts";
+import { assessSdsText, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction } from "../_shared/extraction.ts";
 import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
 import { deleteRows, insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
 import { deleteReleaseAsset, downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
+import { classifySdsReview, findExtractionConflicts } from "../_shared/review-classification.ts";
 import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, type Extraction } from "../_shared/schema.ts";
 import { computeValidity } from "../_shared/validity.ts";
 import { BlobReader, Uint8ArrayWriter, ZipReader } from "npm:@zip.js/zip.js@2.7.57";
@@ -140,7 +141,16 @@ async function ingestPdf(originalName: string, bytes: Uint8Array, actor: Actor, 
     await runExtraction(id, bytes, actor, false, allowGemini);
   } catch (error) {
     const reason = `Extraction failed: ${safeError(error)}`;
-    await updateRows("sds_documents", `id=eq.${id}`, { status: "Needs Review", review_required_reason: reason, updated_at: nowIso() }, false);
+    await updateRows("sds_documents", `id=eq.${id}`, {
+      status: "Needs Review",
+      risk_level: "unknown",
+      review_decision: "error_needs_review",
+      review_reasons: [reason],
+      review_required_reason: reason,
+      ai_verification_status: "error",
+      prescreened_at: nowIso(),
+      updated_at: nowIso()
+    }, false);
     await extractionLog(id, "Extraction", "pdf-text", "Error", null, 0, [], null, reason, 0);
   }
   return await fetchDocument(id);
@@ -237,11 +247,17 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
   const sections = detectSections(sectionScanText);
   const assessment = assessSdsText(textResult.text);
   const regex = extractWithRegex(textResult.text);
+  const preliminary = classifySdsReview(regex, {
+    fullText: sectionScanText,
+    sectionsFound: sections.found,
+    missingSections: sections.missing,
+    ocrRequired: assessment.weakText || Boolean(textError)
+  });
   const geminiKey = Deno.env.get("GEMINI_API_KEY") || "";
   const model = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
   let gemini: Extraction | null = null;
   let geminiError = "";
-  const geminiNeeded = forceGemini || (allowGemini ? shouldUseGemini(regex, assessment.weakText, geminiKey) : assessment.weakText);
+  const geminiNeeded = forceGemini || (allowGemini && preliminary.aiShouldVerify);
   if (geminiNeeded && geminiKey) {
     try { gemini = await extractWithGemini(bytes, textResult.text, geminiKey, model); } catch (error) { geminiError = safeError(error); }
   }
@@ -256,10 +272,26 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
   const activeExistingDuplicate = candidates.find((item: Record<string, unknown>) => item.id === document.duplicate_of_id);
   const duplicateOfId = activeExistingDuplicate?.id || metadataDuplicate?.id || null;
   const merged = mergeExtraction(regex, gemini, { ocrRequired: assessment.weakText || Boolean(textError), duplicate: Boolean(duplicateOfId) });
+  const extractionConflicts = findExtractionConflicts(regex, gemini);
+  const existingApprovedUnchanged = Boolean(
+    activeExistingDuplicate?.status === "Approved" && !extractionConflicts.length
+  );
+  const classification = classifySdsReview(merged, {
+    fullText: sectionScanText,
+    sectionsFound: sections.found,
+    missingSections: sections.missing,
+    ocrRequired: assessment.weakText || Boolean(textError),
+    duplicate: Boolean(duplicateOfId),
+    existingApprovedUnchanged,
+    extractionConflicts
+  });
+  const classificationReason = classification.reasons.join(". ");
+  if (classificationReason) merged.review_required_reason = `${merged.review_required_reason}. ${classificationReason}`;
   if (geminiError) merged.review_required_reason = `${merged.review_required_reason}. ${friendlyExtractionNote(geminiError)}`;
   if (textError) merged.review_required_reason = `${merged.review_required_reason}. PDF text extraction failed: ${textError}`;
   if (sections.missing.length) merged.review_required_reason = `${merged.review_required_reason}. Incomplete SDS: missing section(s) ${sections.missing.join(", ")} of 16 (DOSH CLASS 2013)`;
   const method = gemini ? (assessment.weakText ? "pdf-text+gemini-ocr" : "pdf-text+regex+gemini") : "pdf-text+regex";
+  const aiVerificationStatus = geminiVerificationStatus(geminiNeeded, geminiKey, gemini, geminiError, allowGemini);
 
   await updateRows("sds_documents", `id=eq.${id}`, {
     ...metadataColumns(merged),
@@ -272,13 +304,25 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
     gemini_used: Boolean(gemini),
     extracted_text: textResult.text.slice(0, MAX_TEXT_AUDIT_LENGTH),
     duplicate_of_id: duplicateOfId,
+    risk_level: classification.riskLevel,
+    review_decision: classification.decision,
+    review_reasons: classification.reasons,
+    evidence_snippets: classification.evidence,
+    extraction_conflicts: extractionConflicts,
+    ai_verification_status: aiVerificationStatus,
+    existing_catalog_match: existingApprovedUnchanged,
+    prescreened_at: nowIso(),
     updated_at: nowIso(),
     version: document.version + 2
   }, false);
   await extractionLog(id, "Extraction", method, geminiError ? "Completed with warning" : "Completed", gemini ? model : null, merged.extraction_confidence, assessment.keywordHits, merged, geminiError || textError, textResult.text.length);
   await history(id, "COMPLETE_EXTRACTION", "Parsing", "Extracted", actor, { extraction_method: method }, null);
   await updateRows("sds_documents", `id=eq.${id}`, { status: "Needs Review", updated_at: nowIso(), version: document.version + 3 }, false);
-  await history(id, "ROUTE_TO_EHS_REVIEW", "Extracted", "Needs Review", actor, null, merged.review_required_reason);
+  await history(id, "ROUTE_TO_EHS_REVIEW", "Extracted", "Needs Review", actor, {
+    review_decision: classification.decision,
+    risk_level: classification.riskLevel,
+    ai_verification_status: aiVerificationStatus
+  }, merged.review_required_reason);
 }
 
 async function listDocuments(url: URL, cors: Record<string, string> | null, actor: Actor) {
@@ -904,4 +948,14 @@ function safeError(error: unknown) { return String((error as Error)?.message || 
 function friendlyExtractionNote(geminiError: string) {
   if (/\b429\b|quota|rate.?limit/i.test(geminiError)) return "AI OCR was temporarily unavailable (quota limit reached); please verify the fields manually.";
   return "AI OCR fallback was unavailable; please verify the fields manually.";
+}
+
+function geminiVerificationStatus(needed: boolean, key: string, result: Extraction | null, error: string, allowed: boolean) {
+  if (result) return "verified";
+  if (!allowed && !needed) return "disabled_for_batch";
+  if (!needed) return "skipped_rule_clear";
+  if (!key) return "not_configured";
+  if (/\b429\b|quota|rate.?limit|resource.?exhausted/i.test(error)) return "quota_exceeded";
+  if (/abort|timeout|timed out/i.test(error)) return "timeout";
+  return error ? "error" : "not_run";
 }
