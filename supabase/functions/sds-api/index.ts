@@ -4,8 +4,13 @@ import { insertRows, nowIso, selectRows, updateRows } from "../_shared/database.
 import { downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
 import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, type Extraction } from "../_shared/schema.ts";
 import { computeValidity } from "../_shared/validity.ts";
+import { BlobReader, Uint8ArrayWriter, ZipReader } from "npm:@zip.js/zip.js@2.7.57";
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+const MAX_ZIP_ADVERTISED_BYTES = 100 * 1024 * 1024;
+const MAX_ZIP_EDGE_BYTES = 20 * 1024 * 1024;
+const MAX_ZIP_PDFS = 100;
+const MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
 const MAX_TEXT_AUDIT_LENGTH = 50000;
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const ASK_PDF_MAX_BYTES = 12 * 1024 * 1024;
@@ -15,17 +20,26 @@ const ASK_GEMINI_TIMEOUT_MS = 25000;
 const STATIC_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 let catalogCache: { fetchedAt: number; documents: Record<string, unknown>[] } | null = null;
 
+type EhsRole = "EHS_ADMIN" | "EHS_REVIEWER";
+type Actor = { userId: string | null; displayName: string; role: EhsRole; email: string | null; emergency: boolean };
+
+class ApiProblem extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
 Deno.serve(async (request) => {
   try {
     return await route(request);
   } catch (error) {
     const detail = safeError(error);
     console.error("SDS API error", detail);
-    const adminRequest = apiPath(new URL(request.url).pathname).startsWith("/v1/admin") && await authorized(request).catch(() => false);
+    const adminRequest = apiPath(new URL(request.url).pathname).startsWith("/v1/admin");
+    const status = error instanceof ApiProblem ? error.status : 500;
     return json({
-      error: "The SDS service could not complete the request.",
-      ...(adminRequest ? { detail } : {})
-    }, 500, corsHeaders(request));
+      error: error instanceof ApiProblem ? error.message : "The SDS service could not complete the request.",
+      ...(adminRequest && status >= 500 ? { detail } : {})
+    }, status, corsHeaders(request));
   }
 });
 
@@ -46,38 +60,56 @@ async function route(request: Request) {
   if (path === "/v1/ask" && request.method === "POST") return askQuestion(request, cors);
 
   if (!path.startsWith("/v1/admin")) return json({ error: "Not found." }, 404, cors);
-  if (!await authorized(request)) return json({ error: "Administrator authorization is required." }, 401, { ...cors, "WWW-Authenticate": "Bearer" });
+  const actor = await authenticate(request);
 
-  if (path === "/v1/admin/documents" && request.method === "POST") return uploadDocument(request, cors);
-  if (path === "/v1/admin/documents" && request.method === "GET") return listDocuments(url, cors);
+  if (path === "/v1/admin/session" && request.method === "GET") {
+    await auditEvent(actor, "LOGIN_SUCCESS", null, null, null, null);
+    return json({ user: publicActor(actor) }, 200, cors);
+  }
+
+  if (path === "/v1/admin/documents" && request.method === "POST") return uploadDocument(request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (path === "/v1/admin/documents" && request.method === "GET") return listDocuments(url, cors, actor);
   if (path === "/v1/admin/dashboard" && request.method === "GET") return dashboard(cors);
   if (path === "/v1/admin/duplicates" && request.method === "GET") return duplicateList(cors);
 
-  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|archive|file))?$/i);
+  const bulkMatch = path.match(/^\/v1\/admin\/documents\/bulk\/(archive|delete|restore)$/i);
+  if (bulkMatch && request.method === "POST") return bulkAction(bulkMatch[1].toLowerCase(), request, cors, requireRole(actor, "EHS_ADMIN"));
+
+  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|archive|restore|file))?$/i);
   if (!match || !UUID_PATTERN.test(match[1])) return json({ error: "Admin endpoint not found." }, 404, cors);
   const [, id, action = ""] = match;
-  if (!action && request.method === "GET") return getDocument(id, cors);
-  if (!action && request.method === "PATCH") return saveReview(id, request, cors);
-  if (action === "extract" && request.method === "POST") return reextract(id, request, cors);
-  if (action === "approve" && request.method === "POST") return approve(id, request, cors);
-  if (action === "reject" && request.method === "POST") return changeStatus(id, "Rejected", "Reject", request, cors);
-  if (action === "archive" && request.method === "POST") return changeStatus(id, "Archived", "Archive", request, cors);
-  if (action === "duplicate" && request.method === "POST") return markDuplicate(id, request, cors);
-  if (action === "file" && request.method === "GET") return streamFile(id, url.searchParams.get("variant") || "original", true, cors);
+  if (!action && request.method === "GET") return getDocument(id, cors, actor);
+  if (!action && request.method === "PATCH") return saveReview(id, request, cors, actor);
+  if (action === "extract" && request.method === "POST") return reextract(id, request, cors, actor);
+  if (action === "approve" && request.method === "POST") return approve(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "reject" && request.method === "POST") return changeStatus(id, "Rejected", "REJECT", request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "archive" && request.method === "POST") return changeStatus(id, "Archived", "ARCHIVE", request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "restore" && request.method === "POST") return restoreDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "duplicate" && request.method === "POST") return markDuplicate(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "file" && request.method === "GET") return streamFile(id, url.searchParams.get("variant") || "original", true, cors, actor);
   return json({ error: "Method not allowed." }, 405, cors);
 }
 
-async function uploadDocument(request: Request, cors: Record<string, string> | null) {
+async function uploadDocument(request: Request, cors: Record<string, string> | null, actor: Actor) {
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
-  const reviewer = cleanReviewer(form?.get("reviewer") || "Admin uploader");
-  if (!(file instanceof File)) return json({ error: "A PDF file is required." }, 400, cors);
+  if (!(file instanceof File)) return json({ error: "A PDF or ZIP file is required." }, 400, cors);
+  const isZip = /\.zip$/i.test(file.name) || ["application/zip", "application/x-zip-compressed"].includes(file.type);
+  if (isZip) return uploadZip(file, cors, actor);
   if (file.size < 5 || file.size > MAX_UPLOAD_BYTES) return json({ error: "PDF must be between 5 bytes and 15 MB." }, 413, cors);
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") return json({ error: "The uploaded file does not have a valid PDF signature." }, 400, cors);
 
+  const document = await ingestPdf(String(file.name || "uploaded-sds.pdf"), bytes, actor, null, true);
+  return json({ document }, 201, cors);
+}
+
+async function ingestPdf(originalName: string, bytes: Uint8Array, actor: Actor, batchId: string | null, allowGemini: boolean) {
+  if (bytes.byteLength < 5 || bytes.byteLength > MAX_UPLOAD_BYTES) throw new ApiProblem("PDF exceeds the 15 MB individual file limit.", 413);
+  if (new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") throw new ApiProblem("PDF unreadable: invalid PDF signature.", 400);
+
   const id = crypto.randomUUID();
-  const originalFilename = String(file.name || "uploaded-sds.pdf").slice(0, 255);
+  const originalFilename = String(originalName || "uploaded-sds.pdf").replace(/[\r\n\t]/g, " ").slice(0, 255);
   const digest = await sha256Hex(bytes);
   const duplicates = await selectRows("sds_documents", `select=id,product_name,status&file_sha256=eq.${digest}&order=created_at.desc&limit=1`);
   const duplicate = duplicates[0] || null;
@@ -91,30 +123,110 @@ async function uploadDocument(request: Request, cors: Record<string, string> | n
     original_asset_id: asset.assetId,
     original_download_url: asset.apiUrl,
     file_sha256: digest,
-    file_size: file.size,
+    file_size: bytes.byteLength,
     status: "Uploaded",
+    uploaded_by: actor.userId,
+    batch_id: batchId,
     possible_duplicate_flag: Boolean(duplicate),
     duplicate_of_id: duplicate?.id || null,
     created_at: now,
     updated_at: now
   }, false);
-  await history(id, "Upload", null, "Uploaded", reviewer, { original_filename: originalFilename, sha256: digest }, duplicate ? "Exact file hash already exists." : null);
+  const uploaded = await fetchDocument(id);
+  await history(id, batchId ? "UPLOAD_ZIP_BATCH" : "UPLOAD_SINGLE_PDF", null, "Uploaded", actor, { original_filename: originalFilename, sha256: digest, batch_id: batchId }, duplicate ? "Exact file hash already exists." : null);
+  await auditEvent(actor, batchId ? "UPLOAD_ZIP_BATCH" : "UPLOAD_SINGLE_PDF", uploaded, duplicate ? "Exact file hash already exists." : null, null, { sha256: digest, batch_id: batchId }, batchId);
 
   try {
-    await runExtraction(id, bytes, reviewer, false);
+    await runExtraction(id, bytes, actor, false, allowGemini);
   } catch (error) {
     const reason = `Extraction failed: ${safeError(error)}`;
     await updateRows("sds_documents", `id=eq.${id}`, { status: "Needs Review", review_required_reason: reason, updated_at: nowIso() }, false);
     await extractionLog(id, "Extraction", "pdf-text", "Error", null, 0, [], null, reason, 0);
   }
-  return json({ document: await fetchDocument(id) }, 201, cors);
+  return await fetchDocument(id);
 }
 
-async function runExtraction(id: string, suppliedBytes: Uint8Array | null, reviewer: string, forceGemini: boolean) {
+async function uploadZip(file: File, cors: Record<string, string> | null, actor: Actor) {
+  if (file.size > MAX_ZIP_ADVERTISED_BYTES) return json({ error: "ZIP too large. The configured maximum is 100 MB." }, 413, cors);
+  if (file.size > MAX_ZIP_EDGE_BYTES) return json({ error: "ZIP too large for the current Supabase Edge Function intake. Use ZIP files up to 20 MB, or split this batch. The documented 100 MB ceiling is not safe in this runtime." }, 413, cors);
+
+  const reader = new ZipReader(new BlobReader(file));
+  let entries: any[] = [];
+  try { entries = await reader.getEntries(); }
+  catch { await reader.close().catch(() => {}); return json({ error: "The ZIP file is unreadable or corrupt." }, 400, cors); }
+
+  const files = entries.filter((entry) => !entry.directory);
+  const unsafe = files.find((entry) => unsafeZipPath(String(entry.filename || "")));
+  if (unsafe) { await reader.close(); return json({ error: `Unsafe ZIP path rejected: ${String(unsafe.filename).slice(0, 180)}` }, 400, cors); }
+  const pdfEntries = files.filter((entry) => /\.pdf$/i.test(String(entry.filename || "")));
+  if (!pdfEntries.length) { await reader.close(); return json({ error: "ZIP contains no PDF files." }, 400, cors); }
+  if (pdfEntries.length > MAX_ZIP_PDFS) { await reader.close(); return json({ error: `Too many PDFs in ZIP. Maximum ${MAX_ZIP_PDFS}.` }, 413, cors); }
+  const uncompressedTotal = pdfEntries.reduce((sum, entry) => sum + Number(entry.uncompressedSize || 0), 0);
+  if (uncompressedTotal > MAX_ZIP_UNCOMPRESSED_BYTES) { await reader.close(); return json({ error: "ZIP expands beyond the 200 MB safety limit." }, 413, cors); }
+
+  const batchId = crypto.randomUUID();
+  await insertRows("sds_upload_batches", {
+    id: batchId, uploaded_by: actor.userId, uploaded_by_name: actor.displayName, uploaded_by_role: actor.role,
+    original_zip_filename: String(file.name || "sds-batch.zip").slice(0, 255), total_files: files.length,
+    accepted_pdf_count: 0, rejected_file_count: files.length - pdfEntries.length, status: "Processing"
+  }, false);
+
+  const results: Record<string, unknown>[] = files.filter((entry) => !/\.pdf$/i.test(String(entry.filename || ""))).map((entry) => ({
+    filename: String(entry.filename || "unnamed"), status: "rejected", reason: "Unsupported file skipped"
+  }));
+  let accepted = 0, duplicates = 0, failed = 0, rejected = results.length;
+
+  try {
+    for (let index = 0; index < pdfEntries.length; index += 1) {
+      const entry = pdfEntries[index];
+      const filename = String(entry.filename || `document-${index + 1}.pdf`);
+      if (Number(entry.uncompressedSize || 0) > MAX_UPLOAD_BYTES) {
+        rejected += 1;
+        results.push({ filename, status: "rejected", reason: "PDF exceeds size limit (15 MB)" });
+        continue;
+      }
+      try {
+        const bytes = await entry.getData(new Uint8ArrayWriter());
+        const document = await ingestPdf(filename.split(/[\\/]/).pop() || filename, bytes, actor, batchId, false);
+        accepted += 1;
+        if (document?.possible_duplicate_flag) duplicates += 1;
+        results.push({
+          filename, status: document?.possible_duplicate_flag ? "duplicate" : "processed",
+          document_id: document?.id, product_name: document?.product_name || document?.trade_name || null,
+          manufacturer: document?.manufacturer || document?.supplier || null,
+          date_detected: document?.validity_date_value || null, date_basis_used: document?.validity_date_basis || null,
+          sections_complete: Array.isArray(document?.missing_sections) && document.missing_sections.length === 0,
+          missing_sections: document?.missing_sections || [],
+          reason: document?.ocr_required ? "PDF appears scanned/image-only; OCR review required" : null
+        });
+      } catch (error) {
+        failed += 1;
+        results.push({ filename, status: "failed", reason: safeError(error) });
+      }
+    }
+  } finally {
+    await reader.close().catch(() => {});
+  }
+
+  const status = failed || rejected ? "Completed with warnings" : "Completed";
+  await updateRows("sds_upload_batches", `id=eq.${batchId}`, {
+    accepted_pdf_count: accepted, rejected_file_count: rejected, duplicate_count: duplicates,
+    failed_count: failed, status, results_json: results
+  }, false);
+  await auditEvent(actor, "UPLOAD_ZIP_BATCH", null, `Processed ZIP ${file.name}`, null, { total_files: files.length, accepted, rejected, duplicates, failed }, batchId);
+  return json({ batch: { id: batchId, status, total_files: files.length, accepted_pdf_count: accepted, rejected_file_count: rejected, duplicate_count: duplicates, failed_count: failed }, results }, 201, cors);
+}
+
+function unsafeZipPath(filename: string) {
+  const normalized = filename.replace(/\\/g, "/");
+  return !normalized || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized) || normalized.split("/").includes("..");
+}
+
+async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor: Actor, forceGemini: boolean, allowGemini = true) {
   const document = await fetchDocument(id);
   if (!document) throw new Error("Document not found");
   await updateRows("sds_documents", `id=eq.${id}`, { status: "Parsing", updated_at: nowIso(), version: document.version + 1 }, false);
-  await history(id, "Start extraction", document.status, "Parsing", reviewer, null, null);
+  await history(id, "START_EXTRACTION", document.status, "Parsing", actor, null, null);
 
   const bytes = suppliedBytes || await downloadPrivateAsset(Number(document.original_asset_id));
   let textResult = { text: "", pagesExtracted: 0, totalPages: 0 };
@@ -129,11 +241,12 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, revie
   const model = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
   let gemini: Extraction | null = null;
   let geminiError = "";
-  if ((forceGemini || shouldUseGemini(regex, assessment.weakText, geminiKey)) && geminiKey) {
+  const geminiNeeded = forceGemini || (allowGemini ? shouldUseGemini(regex, assessment.weakText, geminiKey) : assessment.weakText);
+  if (geminiNeeded && geminiKey) {
     try { gemini = await extractWithGemini(bytes, textResult.text, geminiKey, model); } catch (error) { geminiError = safeError(error); }
   }
 
-  const candidates = await selectRows("sds_documents", `select=id,product_name,trade_name,revision_date,status&status=neq.Archived&limit=1000`);
+  const candidates = await selectRows("sds_documents", `select=id,product_name,trade_name,revision_date,status&status=neq.Archived&deleted_at=is.null&archived_at=is.null&limit=1000`);
   const product = regex.product_name || regex.trade_name || gemini?.product_name || gemini?.trade_name;
   const revision = regex.revision_date || gemini?.revision_date || "";
   const metadataDuplicate = product ? candidates.find((item: Record<string, unknown>) => (
@@ -152,6 +265,7 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, revie
     ...metadataColumns(merged),
     sections_found: sections.found,
     missing_sections: sections.missing,
+    section_detection_confidence: sections.confidence,
     status: "Extracted",
     ocr_required: assessment.weakText || Boolean(textError),
     extraction_method: method,
@@ -162,16 +276,21 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, revie
     version: document.version + 2
   }, false);
   await extractionLog(id, "Extraction", method, geminiError ? "Completed with warning" : "Completed", gemini ? model : null, merged.extraction_confidence, assessment.keywordHits, merged, geminiError || textError, textResult.text.length);
-  await history(id, "Complete extraction", "Parsing", "Extracted", reviewer, { extraction_method: method }, null);
+  await history(id, "COMPLETE_EXTRACTION", "Parsing", "Extracted", actor, { extraction_method: method }, null);
   await updateRows("sds_documents", `id=eq.${id}`, { status: "Needs Review", updated_at: nowIso(), version: document.version + 3 }, false);
-  await history(id, "Route to EHS review", "Extracted", "Needs Review", reviewer, null, merged.review_required_reason);
+  await history(id, "ROUTE_TO_EHS_REVIEW", "Extracted", "Needs Review", actor, null, merged.review_required_reason);
 }
 
-async function listDocuments(url: URL, cors: Record<string, string> | null) {
+async function listDocuments(url: URL, cors: Record<string, string> | null, actor: Actor) {
   const status = url.searchParams.get("status") || "";
+  const requestedScope = url.searchParams.get("scope") || "active";
+  const scope = actor.role === "EHS_ADMIN" ? requestedScope : "active";
   const query = url.searchParams.get("q")?.trim() || "";
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 200);
   let filter = `select=*&order=updated_at.desc&limit=${limit}`;
+  if (scope === "deleted") filter += "&deleted_at=not.is.null";
+  else if (scope === "archived") filter += "&deleted_at=is.null&archived_at=not.is.null";
+  else if (scope !== "all") filter += "&deleted_at=is.null&archived_at=is.null";
   if ((SDS_STATUSES as readonly string[]).includes(status)) filter += `&status=eq.${encodeURIComponent(status)}`;
   if (query) {
     const safe = query.replace(/[,*()]/g, " ").trim();
@@ -180,54 +299,67 @@ async function listDocuments(url: URL, cors: Record<string, string> | null) {
   return json({ documents: await selectRows("sds_documents", filter) }, 200, cors);
 }
 
-async function getDocument(id: string, cors: Record<string, string> | null) {
+async function getDocument(id: string, cors: Record<string, string> | null, actor: Actor) {
   const document = await fetchDocument(id);
   if (!document) return json({ error: "Document not found." }, 404, cors);
-  const [logs, reviewHistory] = await Promise.all([
+  if ((document.deleted_at || document.archived_at) && actor.role !== "EHS_ADMIN") return json({ error: "Role does not allow access to archived or deleted SDS records." }, 403, cors);
+  const [logs, reviewHistory, auditEvents] = await Promise.all([
     selectRows("sds_extraction_logs", `select=*&document_id=eq.${id}&order=created_at.desc&limit=50`),
-    selectRows("sds_review_history", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`)
+    selectRows("sds_review_history", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
+    selectRows("sds_audit_events", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`)
   ]);
-  return json({ document, extraction_logs: logs, review_history: reviewHistory }, 200, cors);
+  return json({ document, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
 }
 
-async function saveReview(id: string, request: Request, cors: Record<string, string> | null) {
+async function saveReview(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
   const body = await readJson(request);
-  const reviewer = cleanReviewer(body.reviewer);
   const existing = await fetchDocument(id);
-  if (!reviewer) return json({ error: "Reviewer name is required." }, 400, cors);
   if (!existing) return json({ error: "Document not found." }, 404, cors);
+  if (existing.deleted_at || existing.archived_at) return json({ error: "Restore this record before editing it." }, 409, cors);
   if (existing.status === "Approved" && !body.confirmOverwrite) return json({ error: "This record is already approved. Explicit overwrite confirmation is required." }, 409, cors);
   let metadata: Extraction;
   try { metadata = pickEditableMetadata({ ...metadataFromRow(existing), ...(body.metadata || {}) }); }
-  catch (error) { return json({ error: "Review metadata is invalid.", details: error?.issues || [] }, 400, cors); }
+  catch (error) { return json({ error: "Review metadata is invalid.", details: (error as any)?.issues || [] }, 400, cors); }
+  const dateBefore = dateAuditSnapshot(existing);
+  const dateAfter = dateAuditSnapshot(metadata as unknown as Record<string, unknown>);
+  const dateChanged = JSON.stringify(dateBefore) !== JSON.stringify(dateAfter);
+  if (dateChanged && actor.role !== "EHS_ADMIN") return json({ error: "Role does not allow this action. Only EHS_ADMIN can correct SDS dates." }, 403, cors);
+  if (dateChanged && !cleanComment(body.comment)) return json({ error: "A reason/comment is required for date correction." }, 400, cors);
   const nextStatus = existing.status === "Approved" ? "Needs Review" : existing.status;
   await updateRows("sds_documents", `id=eq.${id}`, { ...metadataColumns(metadata), status: nextStatus, updated_at: nowIso(), version: existing.version + 1 }, false);
-  await history(id, "Edit review metadata", existing.status, nextStatus, reviewer, body.metadata || {}, body.comment);
-  return json({ document: await fetchDocument(id) }, 200, cors);
+  const updated = await fetchDocument(id);
+  await history(id, "SAVE_REVIEW_EDITS", existing.status, nextStatus, actor, body.metadata || {}, body.comment);
+  await auditEvent(actor, "SAVE_REVIEW_EDITS", updated, body.comment, existing, updated);
+  if (dateChanged) await auditEvent(actor, "DATE_CORRECTION", updated, body.comment, dateBefore, dateAuditSnapshot(updated || {}));
+  return json({ document: updated }, 200, cors);
 }
 
-async function reextract(id: string, request: Request, cors: Record<string, string> | null) {
+async function reextract(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
   const body = await readJson(request);
-  const reviewer = cleanReviewer(body.reviewer);
   const existing = await fetchDocument(id);
-  if (!reviewer) return json({ error: "Reviewer name is required." }, 400, cors);
   if (!existing) return json({ error: "Document not found." }, 404, cors);
+  if (existing.deleted_at || existing.archived_at) return json({ error: "Restore this record before requesting re-extraction." }, 409, cors);
   if (existing.status === "Approved" && !body.confirmOverwrite) return json({ error: "Re-extracting an approved record requires explicit confirmation." }, 409, cors);
-  await runExtraction(id, null, reviewer, Boolean(body.forceGemini));
+  await auditEvent(actor, "REQUEST_REEXTRACTION", existing, body.comment, existing, { force_gemini: Boolean(body.forceGemini) });
+  await runExtraction(id, null, actor, Boolean(body.forceGemini));
   return json({ document: await fetchDocument(id) }, 200, cors);
 }
 
-async function approve(id: string, request: Request, cors: Record<string, string> | null) {
+async function approve(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
   const body = await readJson(request);
-  const reviewer = cleanReviewer(body.reviewer);
   const existing = await fetchDocument(id);
-  if (!reviewer) return json({ error: "Reviewer name is required." }, 400, cors);
   if (!existing) return json({ error: "Document not found." }, 404, cors);
+  if (existing.deleted_at || existing.archived_at) return json({ error: "Restore this record before approval." }, 409, cors);
   if (existing.status === "Approved" && !body.confirmOverwrite) return json({ error: "Record is already approved. Explicit overwrite confirmation is required." }, 409, cors);
   let metadata: Extraction;
   try { metadata = pickEditableMetadata({ ...metadataFromRow(existing), ...(body.metadata || {}) }); }
-  catch (error) { return json({ error: "Approval metadata is invalid.", details: error?.issues || [] }, 400, cors); }
+  catch (error) { return json({ error: "Approval metadata is invalid.", details: (error as any)?.issues || [] }, 400, cors); }
   if (!metadata.product_name && !metadata.trade_name) return json({ error: "Product name or trade name is required for approval." }, 400, cors);
+  const dateBefore = dateAuditSnapshot(existing);
+  const dateAfter = dateAuditSnapshot(metadata as unknown as Record<string, unknown>);
+  const dateChanged = JSON.stringify(dateBefore) !== JSON.stringify(dateAfter);
+  if (dateChanged && !cleanComment(body.comment)) return json({ error: "A reason/comment is required for date correction." }, 400, cors);
+  if (metadata.validity_date_basis === "print_date" && !body.confirmPrintDate) return json({ error: "Print date is the only validity basis. EHS confirmation is required before approval.", requires_print_date_confirmation: true }, 409, cors);
   const filename = generateApprovedFilename(metadata as unknown as Record<string, unknown>);
   const collisions = await selectRows("sds_documents", `select=id,product_name&approved_filename=eq.${encodeURIComponent(filename)}&status=eq.Approved&id=neq.${id}&limit=1`);
   if (collisions.length) return json({ error: "Approved filename already exists. Change the metadata or mark this document as a duplicate; existing approved files are never overwritten.", conflict: collisions[0], proposed_filename: filename }, 409, cors);
@@ -242,44 +374,99 @@ async function approve(id: string, request: Request, cors: Record<string, string
     approved_asset_id: asset.assetId,
     approved_download_url: asset.downloadUrl,
     approved_at: approvedAt,
-    approved_by: reviewer,
+    approved_by: actor.displayName,
     updated_at: approvedAt,
     version: existing.version + 1
   }, false);
-  await history(id, "Approve", existing.status, "Approved", reviewer, { approved_filename: filename, metadata }, body.comment);
-  return json({ document: await fetchDocument(id), approved_filename: filename }, 200, cors);
+  const approved = await fetchDocument(id);
+  await history(id, "APPROVE", existing.status, "Approved", actor, { approved_filename: filename, metadata }, body.comment);
+  await auditEvent(actor, "APPROVE", approved, body.comment, existing, approved);
+  if (dateChanged) await auditEvent(actor, "DATE_CORRECTION", approved, body.comment, dateBefore, dateAuditSnapshot(approved || {}));
+  return json({ document: approved, approved_filename: filename }, 200, cors);
 }
 
-async function changeStatus(id: string, target: string, action: string, request: Request, cors: Record<string, string> | null) {
+async function changeStatus(id: string, target: string, action: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
   const body = await readJson(request);
-  const reviewer = cleanReviewer(body.reviewer);
   const existing = await fetchDocument(id);
-  if (!reviewer) return json({ error: "Reviewer name is required." }, 400, cors);
   if (!existing) return json({ error: "Document not found." }, 404, cors);
+  if (existing.deleted_at || (existing.archived_at && target !== "Archived")) return json({ error: "Restore this record before changing its status." }, 409, cors);
+  if (target === "Archived" && existing.archived_at) return json({ error: "Record is already archived." }, 409, cors);
   if (existing.status === "Approved" && !body.confirmOverwrite) return json({ error: "Changing an approved record requires explicit confirmation." }, 409, cors);
   const changes: Record<string, unknown> = { status: target, updated_at: nowIso(), version: existing.version + 1 };
   if (target === "Rejected") changes.rejected_at = nowIso();
-  if (target === "Archived") changes.archived_at = nowIso();
+  if (target === "Archived") { changes.archived_at = nowIso(); changes.archived_by = actor.userId; changes.archive_reason = cleanComment(body.comment); }
   await updateRows("sds_documents", `id=eq.${id}`, changes, false);
-  await history(id, action, existing.status, target, reviewer, null, body.comment);
-  return json({ document: await fetchDocument(id) }, 200, cors);
+  const updated = await fetchDocument(id);
+  await history(id, action, existing.status, target, actor, null, body.comment);
+  await auditEvent(actor, action, updated, body.comment, existing, updated);
+  return json({ document: updated }, 200, cors);
 }
 
-async function markDuplicate(id: string, request: Request, cors: Record<string, string> | null) {
+async function markDuplicate(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
   const body = await readJson(request);
-  const reviewer = cleanReviewer(body.reviewer);
-  if (!reviewer || !UUID_PATTERN.test(String(body.duplicate_of_id || ""))) return json({ error: "Reviewer and a valid duplicate_of_id are required." }, 400, cors);
+  if (!UUID_PATTERN.test(String(body.duplicate_of_id || ""))) return json({ error: "A valid duplicate_of_id is required." }, 400, cors);
   if (body.duplicate_of_id === id) return json({ error: "A record cannot duplicate itself." }, 400, cors);
   const [existing, target] = await Promise.all([fetchDocument(id), fetchDocument(body.duplicate_of_id)]);
   if (!existing || !target) return json({ error: "Document or duplicate target was not found." }, 404, cors);
+  if (existing.deleted_at || existing.archived_at || target.deleted_at || target.archived_at) return json({ error: "Deleted or archived records cannot be used for duplicate control until restored." }, 409, cors);
   if (existing.status === "Approved" && !body.confirmOverwrite) return json({ error: "Marking an approved record as duplicate requires confirmation." }, 409, cors);
   await updateRows("sds_documents", `id=eq.${id}`, { status: "Duplicate", possible_duplicate_flag: true, duplicate_of_id: body.duplicate_of_id, updated_at: nowIso(), version: existing.version + 1 }, false);
-  await history(id, "Mark duplicate", existing.status, "Duplicate", reviewer, { duplicate_of_id: body.duplicate_of_id }, body.comment);
-  return json({ document: await fetchDocument(id) }, 200, cors);
+  const updated = await fetchDocument(id);
+  await history(id, "MARK_DUPLICATE", existing.status, "Duplicate", actor, { duplicate_of_id: body.duplicate_of_id }, body.comment);
+  await auditEvent(actor, "MARK_DUPLICATE", updated, body.comment, existing, updated);
+  return json({ document: updated }, 200, cors);
+}
+
+async function bulkAction(action: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(String).filter((id) => UUID_PATTERN.test(id)))].slice(0, 200);
+  const reason = cleanComment(body.reason);
+  const expected = action === "archive" ? "ARCHIVE" : action === "delete" ? "DELETE" : "RESTORE";
+  if (!ids.length) return json({ error: "Select at least one valid SDS record." }, 400, cors);
+  if (String(body.confirmation || "").trim() !== expected) return json({ error: `Type ${expected} to confirm this bulk action.` }, 400, cors);
+  if (!reason) return json({ error: "A reason/comment is required." }, 400, cors);
+
+  const results: Record<string, unknown>[] = [];
+  let succeeded = 0, skipped = 0, failed = 0;
+  for (const id of ids) {
+    try {
+      const existing = await fetchDocument(id);
+      if (!existing) { skipped += 1; results.push({ id, status: "skipped", reason: "Document not found" }); continue; }
+      if (action === "archive" && (existing.archived_at || existing.deleted_at)) { skipped += 1; results.push({ id, status: "skipped", reason: existing.deleted_at ? "Document is deleted" : "Already archived" }); continue; }
+      if (action === "delete" && existing.deleted_at) { skipped += 1; results.push({ id, status: "skipped", reason: "Already deleted" }); continue; }
+      if (action === "restore" && !existing.deleted_at && !existing.archived_at) { skipped += 1; results.push({ id, status: "skipped", reason: "Document is already active" }); continue; }
+
+      const now = nowIso();
+      let changes: Record<string, unknown>;
+      if (action === "archive") changes = { status: "Archived", archived_at: now, archived_by: actor.userId, archive_reason: reason, updated_at: now, version: existing.version + 1 };
+      else if (action === "delete") changes = { deleted_at: now, deleted_by: actor.userId, delete_reason: reason, updated_at: now, version: existing.version + 1 };
+      else changes = { deleted_at: null, deleted_by: null, delete_reason: null, archived_at: null, archived_by: null, archive_reason: null, status: existing.status === "Archived" ? "Needs Review" : existing.status, updated_at: now, version: existing.version + 1 };
+      await updateRows("sds_documents", `id=eq.${id}`, changes, false);
+      const updated = await fetchDocument(id);
+      const auditAction = action === "archive" ? "BULK_ARCHIVE" : action === "delete" ? "BULK_DELETE" : "RESTORE";
+      await history(id, auditAction, existing.status, String(updated?.status || existing.status), actor, changes, reason);
+      await auditEvent(actor, auditAction, updated, reason, existing, updated);
+      succeeded += 1;
+      results.push({ id, product_name: updated?.product_name || updated?.trade_name || null, status: "success" });
+    } catch (error) {
+      failed += 1;
+      results.push({ id, status: "failed", reason: safeError(error) });
+    }
+  }
+  await auditEvent(actor, action === "archive" ? "BULK_ARCHIVE" : action === "delete" ? "BULK_DELETE" : "RESTORE", null, reason, null, { ids, succeeded, skipped, failed });
+  return json({ total_selected: ids.length, succeeded, skipped, failed, results }, 200, cors);
+}
+
+async function restoreDocument(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  body.ids = [id];
+  body.confirmation = "RESTORE";
+  const forwarded = new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return bulkAction("restore", forwarded, cors, actor);
 }
 
 async function dashboard(cors: Record<string, string> | null) {
-  const rows = await selectRows("sds_documents", "select=id,original_filename,product_name,trade_name,status,extraction_confidence,updated_at&order=updated_at.desc&limit=1000");
+  const rows = await selectRows("sds_documents", "select=id,original_filename,product_name,trade_name,status,extraction_confidence,updated_at&deleted_at=is.null&order=updated_at.desc&limit=1000");
   const counts = Object.fromEntries(SDS_STATUSES.map((status) => [status, rows.filter((row: Record<string, unknown>) => row.status === status).length]));
   const overdue = Date.now() - 7 * 86400000;
   return json({
@@ -290,14 +477,14 @@ async function dashboard(cors: Record<string, string> | null) {
 }
 
 async function duplicateList(cors: Record<string, string> | null) {
-  const rows = await selectRows("sds_documents", "select=id,original_filename,product_name,trade_name,revision_date,status,file_sha256,possible_duplicate_flag,duplicate_of_id,updated_at&order=updated_at.desc&limit=1000");
+  const rows = await selectRows("sds_documents", "select=id,original_filename,product_name,trade_name,revision_date,status,file_sha256,possible_duplicate_flag,duplicate_of_id,updated_at&deleted_at=is.null&archived_at=is.null&order=updated_at.desc&limit=1000");
   const hashes = new Map<string, number>();
   for (const row of rows) hashes.set(row.file_sha256, (hashes.get(row.file_sha256) || 0) + 1);
   return json({ documents: rows.filter((row: Record<string, unknown>) => row.possible_duplicate_flag || (hashes.get(String(row.file_sha256)) || 0) > 1) }, 200, cors);
 }
 
 async function publicCatalog(cors: Record<string, string> | null) {
-  const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,revision_date,established_date,expiry_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&order=product_name.asc.nullslast,trade_name.asc");
+  const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,revision_date,established_date,expiry_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&deleted_at=is.null&archived_at=is.null&order=product_name.asc.nullslast,trade_name.asc");
   return json({
     schemaVersion: 1,
     updatedAt: new Date().toISOString().slice(0, 10),
@@ -364,7 +551,7 @@ async function askQuestion(request: Request, cors: Record<string, string> | null
 
 async function resolveSdsForAsk(chemicalId: string) {
   if (UUID_PATTERN.test(chemicalId)) {
-    const rows = await selectRows("sds_documents", `select=product_name,trade_name,revision_date,approved_download_url,status&id=eq.${chemicalId}&status=eq.Approved&limit=1`);
+    const rows = await selectRows("sds_documents", `select=product_name,trade_name,revision_date,approved_download_url,status&id=eq.${chemicalId}&status=eq.Approved&deleted_at=is.null&archived_at=is.null&limit=1`);
     const doc = rows[0];
     if (!doc || !doc.approved_download_url) return null;
     return {
@@ -475,9 +662,10 @@ function askBytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-async function streamFile(id: string, variant: string, admin: boolean, cors: Record<string, string> | null) {
+async function streamFile(id: string, variant: string, admin: boolean, cors: Record<string, string> | null, actor: Actor | null = null) {
   const document = await fetchDocument(id);
-  if (!document || (!admin && document.status !== "Approved")) return json({ error: "Approved document not found." }, 404, cors);
+  if (!document || (!admin && (document.status !== "Approved" || document.deleted_at || document.archived_at))) return json({ error: "Approved document not found." }, 404, cors);
+  if (admin && (document.deleted_at || document.archived_at) && actor?.role !== "EHS_ADMIN") return json({ error: "Role does not allow access to archived or deleted SDS records." }, 403, cors);
   if (!admin || variant === "approved") {
     if (!document.approved_download_url) return json({ error: "Approved file is unavailable." }, 404, cors);
     return Response.redirect(document.approved_download_url, 302);
@@ -502,7 +690,10 @@ function metadataFromRow(row: Record<string, unknown>) {
 }
 
 function metadataColumns(metadata: Extraction) {
-  const validity = computeValidity(metadata.issue_date, metadata.revision_date);
+  const derivedBasis = metadata.validity_date_basis
+    || (metadata.revision_date ? "revision_date" : metadata.issue_date ? "issue_date" : metadata.preparation_date ? "preparation_date" : metadata.establishment_date ? "establishment_date" : metadata.effective_date ? "effective_date" : metadata.print_date ? "print_date" : null);
+  const validityValue = derivedBasis ? metadata[derivedBasis] : metadata.validity_date_value;
+  const validity = computeValidity(validityValue, null);
   return {
     is_likely_sds: metadata.is_likely_sds,
     product_name: metadata.product_name,
@@ -512,6 +703,15 @@ function metadataColumns(metadata: Extraction) {
     language: metadata.language,
     issue_date: metadata.issue_date,
     revision_date: metadata.revision_date,
+    preparation_date: metadata.preparation_date,
+    print_date: metadata.print_date,
+    effective_date: metadata.effective_date,
+    establishment_date: metadata.establishment_date,
+    detected_date_source: metadata.detected_date_source,
+    detected_date_confidence: Math.round(metadata.detected_date_confidence),
+    validity_date_basis: derivedBasis,
+    validity_date_value: validity.establishedDate,
+    date_detection_warnings: metadata.date_detection_warnings,
     established_date: validity.establishedDate,
     expiry_date: validity.expiryDate,
     cas_numbers: metadata.cas_numbers,
@@ -540,26 +740,82 @@ async function extractionLog(documentId: string, stage: string, method: string, 
   }, false);
 }
 
-async function history(documentId: string, action: string, fromStatus: string | null, toStatus: string | null, reviewer: string, changes: unknown, comment: unknown) {
+async function history(documentId: string, action: string, fromStatus: string | null, toStatus: string | null, actor: Actor, changes: unknown, comment: unknown) {
   await insertRows("sds_review_history", {
     document_id: documentId, action, from_status: fromStatus, to_status: toStatus,
-    reviewer: cleanReviewer(reviewer) || "System", changes_json: changes,
+    reviewer: actor.displayName, actor_user_id: actor.userId, reviewer_role: actor.role, changes_json: changes,
     comment: comment ? String(comment).slice(0, 2000) : null
   }, false);
 }
 
-async function authorized(request: Request) {
-  const expected = Deno.env.get("ADMIN_API_TOKEN") || "";
-  const provided = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || "";
-  if (!expected || !provided) return false;
+async function auditEvent(actor: Actor, action: string, document: Record<string, any> | null, reason: unknown, before: unknown, after: unknown, batchId: string | null = null) {
+  await insertRows("sds_audit_events", {
+    document_id: document?.id || null,
+    batch_id: batchId,
+    action,
+    product_name: document?.product_name || document?.trade_name || null,
+    original_filename: document?.original_filename || null,
+    actor_user_id: actor.userId,
+    display_name: actor.displayName,
+    role: actor.role,
+    reason: cleanComment(reason),
+    before_json: before ?? null,
+    after_json: after ?? null
+  }, false);
+}
+
+async function authenticate(request: Request): Promise<Actor> {
+  const provided = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "").trim() || "";
+  if (!provided) throw new ApiProblem("Not logged in.", 401);
+
+  const emergency = Deno.env.get("ADMIN_API_TOKEN") || "";
+  if (emergency && await safeTokenEqual(provided, emergency)) {
+    return { userId: null, displayName: "Emergency Administrator", role: "EHS_ADMIN", email: null, emergency: true };
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  if (!supabaseUrl || !anonKey) throw new ApiProblem("Supabase Auth configuration is unavailable.", 500);
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { apikey: anonKey, Authorization: `Bearer ${provided}`, Accept: "application/json" }
+  });
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) throw new ApiProblem("Session expired. Please log in again.", 401);
+    throw new ApiProblem("Supabase Auth could not validate this session.", 502);
+  }
+  const user = await response.json();
+  if (!user?.id || !UUID_PATTERN.test(String(user.id))) throw new ApiProblem("Session expired. Please log in again.", 401);
+  const profiles = await selectRows("admin_users", `select=id,display_name,role,is_active&id=eq.${user.id}&limit=1`);
+  const profile = profiles[0];
+  if (!profile) throw new ApiProblem("User not authorized for EHS admin.", 403);
+  if (!profile.is_active) throw new ApiProblem("Account inactive.", 403);
+  if (!["EHS_ADMIN", "EHS_REVIEWER"].includes(String(profile.role))) throw new ApiProblem("User not authorized for EHS admin.", 403);
+  return { userId: String(user.id), displayName: cleanReviewer(profile.display_name) || String(user.email || "EHS user"), role: profile.role as EhsRole, email: String(user.email || "") || null, emergency: false };
+}
+
+function requireRole(actor: Actor, role: EhsRole) {
+  if (actor.role !== role) throw new ApiProblem("Role does not allow this action.", 403);
+  return actor;
+}
+
+function publicActor(actor: Actor) {
+  return { id: actor.userId, email: actor.email, display_name: actor.displayName, role: actor.role, emergency: actor.emergency };
+}
+
+async function safeTokenEqual(leftToken: string, rightToken: string) {
   const encoder = new TextEncoder();
   const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(provided)), crypto.subtle.digest("SHA-256", encoder.encode(expected))
+    crypto.subtle.digest("SHA-256", encoder.encode(leftToken)), crypto.subtle.digest("SHA-256", encoder.encode(rightToken))
   ]);
   const left = new Uint8Array(leftHash), right = new Uint8Array(rightHash);
   let difference = 0;
   for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
   return difference === 0;
+}
+
+function dateAuditSnapshot(value: Record<string, unknown>) {
+  const keys = ["revision_date","issue_date","preparation_date","establishment_date","effective_date","print_date","validity_date_basis","validity_date_value"];
+  return Object.fromEntries(keys.map((key) => [key, value?.[key] ?? null]));
 }
 
 function apiPath(pathname: string) {
@@ -568,7 +824,7 @@ function apiPath(pathname: string) {
   return index >= 0 ? pathname.slice(index + marker.length) || "/" : pathname;
 }
 
-function corsHeaders(request: Request) {
+function corsHeaders(request: Request): Record<string, string> | null {
   const origin = request.headers.get("Origin");
   const allowed = (Deno.env.get("ALLOWED_ORIGIN") || "").split(",").map((item) => item.trim()).filter(Boolean);
   if (!origin) return {};
@@ -597,5 +853,6 @@ function json(payload: unknown, status = 200, extraHeaders: Record<string, strin
 }
 
 function cleanReviewer(value: unknown) { return String(value || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100); }
+function cleanComment(value: unknown) { return String(value || "").replace(/[\r\t]+/g, " ").trim().slice(0, 2000) || null; }
 async function readJson(request: Request): Promise<Record<string, any>> { try { return await request.json(); } catch { return {}; } }
 function safeError(error: unknown) { return String((error as Error)?.message || error || "Unknown error").replace(/[\r\n\t]+/g, " ").slice(0, 500); }

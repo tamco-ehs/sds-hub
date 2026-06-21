@@ -105,13 +105,108 @@ const SDS_SECTION_KEYWORDS: Record<number, string[]> = {
 };
 
 export function detectSections(text: string) {
-  const normalized = String(text || "").toLowerCase().replace(/\s+/g, " ");
+  const source = String(text || "").toLowerCase();
   const found: number[] = [];
   const missing: number[] = [];
   for (let section = 1; section <= 16; section += 1) {
-    (SDS_SECTION_KEYWORDS[section].some((keyword) => normalized.includes(keyword)) ? found : missing).push(section);
+    const keywordHeading = SDS_SECTION_KEYWORDS[section].some((keyword) => {
+      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(?:section\\s*)?0?${section}\\s*(?:[.\\-:\u2013\u2014]|\\s)[^\\n]{0,100}${escaped}`, "im").test(source);
+    });
+    (keywordHeading ? found : missing).push(section);
   }
-  return { found, missing };
+  return { found, missing, confidence: Math.round((found.length / 16) * 100) };
+}
+
+type DateField = "revision_date" | "issue_date" | "preparation_date" | "print_date" | "effective_date" | "establishment_date";
+
+const DATE_LABELS: Record<DateField, string[]> = {
+  revision_date: ["Revision date", "Revised date", "Date of revision", "Tarikh semakan", "Tarikh disemak", "Revision"],
+  issue_date: ["Issue date", "Issued date", "Date of issue", "Tarikh dikeluarkan", "Tarikh keluaran"],
+  preparation_date: ["Preparation date", "Prepared date", "Date prepared", "SDS Date Of Preparation", "Tarikh penyediaan", "Tarikh disediakan"],
+  print_date: ["Print date", "Printed date", "Printing date", "Tarikh cetakan", "Tarikh dicetak"],
+  effective_date: ["Effective date", "Publication date", "SDS date", "Created date", "Creation date", "Tarikh kuat kuasa", "Tarikh penerbitan"],
+  establishment_date: ["Establishment date", "Date of establishment"]
+};
+
+const DATE_PRIORITY: DateField[] = ["revision_date", "issue_date", "preparation_date", "establishment_date", "effective_date", "print_date"];
+const MONTHS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9,
+  sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12
+};
+const DATE_VALUE_PATTERN = "(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{4}|\\d{1,2}[\\s-]+[A-Za-z]{3,9}[\\s-]+\\d{4}|[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4})";
+
+export function detectSdsDates(text: string) {
+  const source = String(text || "");
+  const dates: Record<DateField, string | null> = {
+    revision_date: null, issue_date: null, preparation_date: null,
+    print_date: null, effective_date: null, establishment_date: null
+  };
+  const labels: Partial<Record<DateField, string>> = {};
+  const warnings: string[] = [];
+
+  for (const field of DATE_PRIORITY) {
+    for (const label of DATE_LABELS[field].sort((a, b) => b.length - a.length)) {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const match = source.match(new RegExp(`(?:^|\\n|\\r|\\b)${escaped}\\s*(?:[:#]|[-\u2013\u2014])?\\s*(${DATE_VALUE_PATTERN})`, "i"));
+      if (!match) continue;
+      const normalized = normalizeSdsDate(match[1]);
+      if (!normalized.value) continue;
+      dates[field] = normalized.value;
+      labels[field] = label;
+      if (normalized.warning) warnings.push(`${label}: ${normalized.warning}`);
+      break;
+    }
+  }
+
+  const basis = DATE_PRIORITY.find((field) => dates[field]) || null;
+  const value = basis ? dates[basis] : null;
+  const uniqueDates = [...new Set(Object.values(dates).filter(Boolean))];
+  if (uniqueDates.length > 1) warnings.push("Multiple SDS dates detected. Please confirm the correct validity basis.");
+  if (basis === "print_date") warnings.push("Print date is being used only because no better SDS date was found. EHS confirmation is required.");
+  const confidence = !basis ? 0 : basis === "print_date" ? 35 : uniqueDates.length > 1 ? 65 : 90;
+  return {
+    ...dates,
+    detected_date_source: basis ? labels[basis] || basis : null,
+    detected_date_confidence: confidence,
+    validity_date_basis: basis,
+    validity_date_value: value,
+    date_detection_warnings: [...new Set(warnings)]
+  };
+}
+
+function normalizeSdsDate(raw: string) {
+  const value = String(raw || "").trim().replace(/\s+/g, " ");
+  let year = 0, month = 0, day = 0;
+  let warning = "";
+  let match = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) [, year, month, day] = match.map(Number);
+  if (!match) {
+    match = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+    if (match) {
+      const first = Number(match[1]), second = Number(match[2]);
+      year = Number(match[3]);
+      if (first <= 12 && second > 12) { month = first; day = second; }
+      else { day = first; month = second; if (first <= 12 && second <= 12) warning = "ambiguous numeric date interpreted as day/month/year"; }
+    }
+  }
+  if (!match) {
+    match = value.match(/^(\d{1,2})[\s-]+([A-Za-z]{3,9})[\s-]+(\d{4})$/i);
+    if (match) { day = Number(match[1]); month = MONTHS[match[2].toLowerCase()] || 0; year = Number(match[3]); }
+  }
+  if (!match) {
+    match = value.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/i);
+    if (match) { month = MONTHS[match[1].toLowerCase()] || 0; day = Number(match[2]); year = Number(match[3]); }
+  }
+  if (!validCalendarDate(year, month, day)) return { value: null, warning: "" };
+  return { value: `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`, warning };
+}
+
+function validCalendarDate(year: number, month: number, day: number) {
+  if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 export function assessSdsText(text: string) {
@@ -132,13 +227,23 @@ export function assessSdsText(text: string) {
 export function extractWithRegex(text: string) {
   const result = emptyExtraction();
   const assessment = assessSdsText(text);
+  const dates = detectSdsDates(text);
   result.is_likely_sds = assessment.isLikelySds;
   result.product_name = firstLabel(text, ["Product name", "Product identifier", "Material name", "Nama produk"]);
   result.trade_name = firstLabel(text, ["Trade name", "Nama dagangan"]);
   result.supplier = firstLabel(text, ["Supplier", "Supplier name", "Pembekal"]);
   result.manufacturer = firstLabel(text, ["Manufacturer", "Manufactured by", "Pengilang"]);
-  result.issue_date = firstLabel(text, ["Issue date", "Date of issue", "Tarikh terbitan"]);
-  result.revision_date = firstLabel(text, ["Revision date", "Date of revision", "SDS Date Of Preparation", "Preparation date", "Tarikh semakan"]);
+  result.issue_date = dates.issue_date;
+  result.revision_date = dates.revision_date;
+  result.preparation_date = dates.preparation_date;
+  result.print_date = dates.print_date;
+  result.effective_date = dates.effective_date;
+  result.establishment_date = dates.establishment_date;
+  result.detected_date_source = dates.detected_date_source;
+  result.detected_date_confidence = dates.detected_date_confidence;
+  result.validity_date_basis = dates.validity_date_basis;
+  result.validity_date_value = dates.validity_date_value;
+  result.date_detection_warnings = dates.date_detection_warnings;
   result.recommended_use = firstLabel(text, ["Recommended use", "Product use", "Identified uses", "Kegunaan yang disarankan"]);
   result.signal_word = firstMatch(text, /\b(DANGER|WARNING|AMARAN|BAHAYA)\b/i)?.toUpperCase() || null;
   result.language = detectLanguage(text);
@@ -200,7 +305,7 @@ export function mergeExtraction(regexResult: Extraction, geminiResult: Extractio
   for (const key of Object.keys(merged)) {
     const regexValue = (regexResult as unknown as Record<string, unknown>)?.[key];
     const geminiValue = (geminiResult as unknown as Record<string, unknown> | null)?.[key];
-    if (["product_name", "trade_name", "supplier", "manufacturer", "issue_date", "revision_date", "recommended_use"].includes(key)) {
+    if (["product_name", "trade_name", "supplier", "manufacturer", "issue_date", "revision_date", "preparation_date", "print_date", "effective_date", "establishment_date", "detected_date_source", "detected_date_confidence", "validity_date_basis", "validity_date_value", "recommended_use"].includes(key)) {
       merged[key] = hasValue(regexValue) ? regexValue : (geminiValue ?? merged[key]);
     } else if (Array.isArray(merged[key])) {
       merged[key] = uniqueValues([...(Array.isArray(regexValue) ? regexValue : []), ...(Array.isArray(geminiValue) ? geminiValue : [])]);
@@ -231,6 +336,7 @@ export function buildReviewReason(result: Extraction, ocrRequired: boolean, dupl
   if (!result.is_likely_sds) reasons.push("Document did not contain enough SDS structure markers");
   if (duplicate) reasons.push("Possible duplicate detected");
   if (result.extraction_confidence < 90) reasons.push(`Extraction confidence is ${Math.round(result.extraction_confidence)}%`);
+  reasons.push(...(result.date_detection_warnings || []));
   const missing = calculateMissingFields(result);
   if (missing.length) reasons.push(`Missing review fields: ${missing.join(", ")}`);
   reasons.push("EHS approval is required before publication");

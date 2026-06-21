@@ -11,14 +11,16 @@ A production-oriented Safety Data Sheet catalog for GitHub Pages. The static app
 - Network-first service worker behavior for safety-critical data and PDFs
 - Content Security Policy with AI disabled by default
 - Supabase Edge Function for server-side intake and structured Gemini extraction
-- Admin intake at `admin.html`, with Postgres audit history and GitHub Release asset storage
+- Supabase Auth email/password admin intake at `admin.html`, with `EHS_ADMIN` / `EHS_REVIEWER` authorization
+- Actor-based Postgres audit history, soft archive/delete/restore, and GitHub Release asset storage
+- Single-PDF and controlled ZIP batch intake (up to 100 PDFs; every document still requires EHS review)
 - Server-side PDF text extraction, regex-first metadata detection, and optional Gemini JSON fallback
 - EHS approval, duplicate handling, and controlled approved filename generation
 - Automated tests, catalog/PDF validation, production build, and GitHub Pages deployment workflow
 
 ## Local verification
 
-Node.js 20 or newer is required for validation and tests. The application itself has no runtime package dependencies.
+Node.js 20 or newer is required for validation and tests. The public catalog has no runtime package dependency; the admin page loads the pinned official Supabase JavaScript client for Auth.
 
 ```powershell
 npm test
@@ -123,6 +125,8 @@ window.SDS_CONFIG = Object.freeze({
   emergencyHref: "https://example.org/emergency",
   aiEnabled: false,
   aiProxyUrl: "",
+  supabaseUrl: "https://your-project.supabase.co",
+  supabaseAnonKey: "sb_publishable_...",
   adminApiUrl: "",
   catalogApiUrl: "",
   maxQuestionLength: 500
@@ -130,6 +134,46 @@ window.SDS_CONFIG = Object.freeze({
 ```
 
 For the production intake backend, follow [SDS-INTAKE-DEPLOYMENT.md](SDS-INTAKE-DEPLOYMENT.md). The legacy local onboarding commands remain available for an offline administrator workflow.
+
+Only the Supabase publishable/anon key belongs in `assets/config.js`; it is intentionally public and is limited by Auth/RLS. Never place a service-role key, `ADMIN_API_TOKEN`, Gemini key, or GitHub token in frontend files.
+
+## Supabase Auth and EHS roles
+
+1. In Supabase **Authentication > Providers**, enable Email/Password.
+2. Apply the database migrations before deploying the updated function.
+3. Create the first user in **Authentication > Users**.
+4. Copy that user's UUID and register the first active administrator in the SQL editor:
+
+```sql
+insert into public.admin_users (id, display_name, role, is_active)
+values ('AUTH-USER-UUID', 'EHS Administrator', 'EHS_ADMIN', true);
+```
+
+Use `EHS_REVIEWER` for staff who may review/edit/request re-extraction but must not upload, approve, reject, archive, delete, restore, mark duplicates, or correct validity dates. Deactivating `admin_users.is_active` blocks the account without deleting its audit identity.
+
+The browser sends the user's short-lived Supabase access token to the Edge Function. The backend validates the token and reloads the role for every request. Reviewer identity is never accepted from free-text browser input.
+
+## Controlled intake and deletion
+
+- A single PDF is limited to 15 MB.
+- ZIP intake processes PDF entries only, rejects unsafe paths and oversized entries, hashes every PDF, and creates review-queue records without auto-approval.
+- The logical design ceiling is 100 MB / 100 PDFs, but the current Supabase Edge runtime is deliberately capped at **20 MB per ZIP request** to avoid gateway/memory failures. Split larger batches.
+- Bulk archive/delete is `EHS_ADMIN` only and requires a typed confirmation plus reason. Delete is soft-delete: original and approved release assets are not physically purged.
+- Deleted/archived records are removed from the dynamic public catalog, search, and QR resolution. Administrators can filter them in Master Register and restore them for audit recovery.
+
+## Deployment order
+
+Deploy in this order so the function never references missing role/audit columns:
+
+```powershell
+npx.cmd supabase db push --linked
+npx.cmd supabase functions deploy sds-api --project-ref jxvsxwsmfycvewxeyxmp --no-verify-jwt
+npm.cmd test
+npm.cmd run build
+git push
+```
+
+Then test: authorized login, unlisted/inactive/role blocking, single PDF, ZIP batch, review/edit/re-extraction, approval, public catalog/QR link, bulk archive/delete, and restore.
 
 If `emergencyHref` contains internal or sensitive information, do not publish it through a public GitHub Pages repository.
 

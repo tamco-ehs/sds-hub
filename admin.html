@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#102a43">
   <meta name="robots" content="noindex, nofollow">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://jxvsxwsmfycvewxeyxmp.supabase.co; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self' blob:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://jxvsxwsmfycvewxeyxmp.supabase.co; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; object-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; worker-src 'self' blob:">
   <title>SDS Intake Administration</title>
   <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./assets/admin.css">
   <script src="./assets/config.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.2/dist/umd/supabase.min.js" defer></script>
   <script type="module" src="./assets/admin.js"></script>
 </head>
 <body>
@@ -18,14 +19,17 @@
       <img src="./assets/icon.svg" alt="">
       <span><strong>SDS Intake Control</strong><small>EHS review workspace</small></span>
     </a>
-    <div id="connectionBadge" class="connection-badge">Not connected</div>
+    <div class="session-controls">
+      <div id="connectionBadge" class="connection-badge">Not logged in</div>
+      <button id="logoutButton" class="header-action" type="button" hidden>Logout</button>
+    </div>
   </header>
 
   <div class="admin-shell">
-    <aside class="admin-sidebar">
+    <aside id="adminSidebar" class="admin-sidebar" hidden>
       <nav aria-label="SDS administration">
         <button class="nav-button is-active" data-view="dashboard" type="button">Review Dashboard</button>
-        <button class="nav-button" data-view="upload" type="button">SDS Upload</button>
+        <button class="nav-button" data-view="upload" data-admin-only type="button">SDS Upload</button>
         <button class="nav-button" data-view="queue" type="button">Parsing Queue</button>
         <button class="nav-button" data-view="review" type="button">Review &amp; Approval</button>
         <button class="nav-button" data-view="master" type="button">Master Register</button>
@@ -36,17 +40,17 @@
     </aside>
 
     <main class="admin-main">
-      <section id="connectionPanel" class="connection-panel">
+      <section id="connectionPanel" class="connection-panel login-panel">
         <div>
-          <h1>Connect the EHS workspace</h1>
-          <p>The administrator token is kept only in this browser tab. It is never written to source code.</p>
+          <h1>Sign in to the EHS workspace</h1>
+          <p>Use your authorized Supabase account. Access is limited to active members of the EHS role register.</p>
         </div>
-        <div class="connection-fields">
-          <label>API URL<input id="apiUrlInput" type="url" placeholder="https://sds-api.example.workers.dev"></label>
-          <label>Reviewer name<input id="reviewerInput" type="text" maxlength="100" autocomplete="name" placeholder="EHS reviewer"></label>
-          <label>Admin token<input id="adminTokenInput" type="password" autocomplete="off" placeholder="Worker ADMIN_API_TOKEN"></label>
-          <button id="connectButton" class="primary-action" type="button">Connect</button>
-        </div>
+        <form id="loginForm" class="connection-fields">
+          <label>Email<input id="emailInput" type="email" autocomplete="username" required placeholder="ehs@example.com"></label>
+          <label>Password<input id="passwordInput" type="password" autocomplete="current-password" required></label>
+          <button id="loginButton" class="primary-action" type="submit">Login</button>
+          <p id="loginError" class="login-error" role="alert" hidden></p>
+        </form>
       </section>
 
       <div id="workspace" hidden>
@@ -60,12 +64,13 @@
           <div class="view-heading"><div><p class="eyebrow">Intake</p><h1>SDS Upload</h1></div></div>
           <form id="uploadForm" class="panel upload-panel">
             <label class="file-drop" for="pdfInput">
-              <strong>Select an original SDS PDF</strong>
-              <span>The original filename and SHA-256 hash are retained permanently. Maximum 15 MB.</span>
-              <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf" required>
+              <strong>Select one SDS PDF or a ZIP batch</strong>
+              <span>PDF: maximum 15 MB. ZIP: up to 100 PDFs and 20 MB in the current Edge runtime. Originals, hashes, and batch results are retained.</span>
+              <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf,application/zip,application/x-zip-compressed,.zip" required>
             </label>
             <button id="uploadButton" class="primary-action" type="submit">Upload and extract</button>
           </form>
+          <div id="uploadProgress" class="upload-progress" hidden></div>
           <div id="uploadResult" class="result-message" hidden></div>
         </section>
 
@@ -86,10 +91,10 @@
               <div class="action-row">
                 <button id="saveReviewButton" class="secondary-action" type="button">Save edits</button>
                 <button id="reextractButton" class="secondary-action" type="button">Request re-extraction</button>
-                <button id="duplicateButton" class="secondary-action" type="button">Mark duplicate</button>
-                <button id="archiveButton" class="secondary-action" type="button">Archive</button>
-                <button id="rejectButton" class="danger-action" type="button">Reject</button>
-                <button id="approveButton" class="primary-action" type="button">Approve and rename</button>
+                <button id="duplicateButton" class="secondary-action" data-admin-only type="button">Mark duplicate</button>
+                <button id="archiveButton" class="secondary-action" data-admin-only type="button">Archive</button>
+                <button id="rejectButton" class="danger-action" data-admin-only type="button">Reject</button>
+                <button id="approveButton" class="primary-action" data-admin-only type="button">Approve and rename</button>
               </div>
             </form>
           </div>
@@ -97,7 +102,19 @@
 
         <section class="admin-view" data-view-panel="master" hidden>
           <div class="view-heading"><div><p class="eyebrow">Controlled records</p><h1>SDS Master Register</h1></div><button class="secondary-action" data-refresh="master" type="button">Refresh</button></div>
-          <div class="panel"><div class="table-toolbar"><input id="masterSearch" type="search" placeholder="Search product or original filename"><select id="masterStatus"><option value="">All statuses</option></select><button id="masterSearchButton" class="secondary-action" type="button">Search</button></div><div id="masterTable"></div></div>
+          <div class="panel">
+            <div class="table-toolbar"><input id="masterSearch" type="search" placeholder="Search product or original filename"><select id="masterStatus"><option value="">All statuses</option></select><select id="masterScope" data-admin-only><option value="active">Active records</option><option value="archived">Archived records</option><option value="deleted">Deleted records</option><option value="all">All records</option></select><button id="masterSearchButton" class="secondary-action" type="button">Search</button></div>
+            <div id="bulkToolbar" class="bulk-toolbar" data-admin-only>
+              <button id="selectAllButton" class="secondary-action" type="button">Select all visible</button>
+              <button id="clearSelectionButton" class="secondary-action" type="button">Clear selection</button>
+              <strong id="selectedCount">0 selected</strong>
+              <button id="bulkArchiveButton" class="secondary-action" type="button">Bulk archive</button>
+              <button id="bulkDeleteButton" class="danger-action" type="button">Bulk delete</button>
+              <button id="bulkRestoreButton" class="secondary-action" type="button">Restore selected</button>
+            </div>
+            <div id="masterTable"></div>
+            <div id="bulkResult" class="result-message" hidden></div>
+          </div>
         </section>
 
         <section class="admin-view" data-view-panel="duplicates" hidden>
@@ -112,6 +129,16 @@
       </div>
     </main>
   </div>
+
+  <dialog id="bulkDialog" class="confirmation-dialog">
+    <form id="bulkForm" method="dialog">
+      <h2 id="bulkDialogTitle">Confirm bulk action</h2>
+      <p id="bulkDialogMessage"></p>
+      <label>Reason/comment<textarea id="bulkReason" rows="3" required></textarea></label>
+      <label>Typed confirmation<input id="bulkConfirmation" type="text" autocomplete="off" required></label>
+      <div class="action-row"><button id="bulkCancelButton" class="secondary-action" type="button">Cancel</button><button id="bulkConfirmButton" class="danger-action" type="submit">Confirm</button></div>
+    </form>
+  </dialog>
 
   <div id="adminToast" class="admin-toast" role="status" aria-live="polite" hidden></div>
 </body>
