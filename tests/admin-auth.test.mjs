@@ -13,10 +13,13 @@ test("admin page uses Supabase email/password login without manual token identit
   assert.match(html, /id="emailInput"/);
   assert.match(html, /id="passwordInput"/);
   assert.match(html, /id="logoutButton"/);
+  assert.match(html, /id="passwordDialog"/);
   assert.doesNotMatch(html, /id="adminTokenInput"/);
   assert.doesNotMatch(html, /id="reviewerInput"/);
   assert.doesNotMatch(html, /id="apiUrlInput"/);
   assert.match(script, /signInWithPassword/);
+  assert.match(script, /updateUser\(\{ password \}\)/);
+  assert.match(script, /detectSessionInUrl:true/);
   assert.match(script, /Authorization:`Bearer \$\{token\}`/);
   assert.doesNotMatch(script, /sds-admin-token|sds-reviewer/);
 });

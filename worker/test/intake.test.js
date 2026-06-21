@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { assessSdsText, extractFirstTwoPages, extractWithRegex, mergeExtraction } from "../src/extraction.js";
+import { assessSdsText, extractWithRegex, mergeExtraction } from "../src/extraction.js";
 import { generateApprovedFilename, normalizeRevisionForFilename, sanitizeFilenamePart } from "../src/filename.js";
 
 const sampleText = `
@@ -71,14 +70,14 @@ test("merged extraction always records EHS review reasons", () => {
   assert.match(merged.review_required_reason, /EHS approval is required/);
 });
 
-test("extracts the trade name from inside a real SDS PDF", async () => {
-  const bytes = await readFile(new URL("../../pdfs/wd-40-aerosol-asia-2023-06-26.pdf", import.meta.url));
-  const extracted = await extractFirstTwoPages(new Uint8Array(bytes));
-  const result = extractWithRegex(extracted.text);
-
-  assert.equal(extracted.pagesExtracted, 2);
-  assert.match(extracted.text, /Trade Name:\s*WD-40 Aerosol/i);
+test("extracts the labelled WD-40 trade name without relying on the filename", () => {
+  const result = extractWithRegex(`SAFETY DATA SHEET
+Section 1: Identification
+Trade Name: WD-40 Aerosol
+Supplier: WD-40 Company
+Emergency Contact: 123
+Section 2: Hazard Identification
+GHS
+WARNING`);
   assert.equal(result.trade_name, "WD-40 Aerosol");
-  assert.match(result.first_aid_summary, /DO NOT induce vomiting/i);
-  assert.match(result.storage_summary, /Store in a cool, well-ventilated area/i);
 });

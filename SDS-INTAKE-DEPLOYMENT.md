@@ -33,7 +33,7 @@ The existing reviewed GitHub Pages catalog remains the emergency-safe fallback i
 ## Enable Auth and create the first administrator
 
 1. Enable Email/Password in Supabase **Authentication > Providers**.
-2. Create the first user in **Authentication > Users**.
+2. Invite the first user in **Authentication > Users** and redirect to `https://izzulwork1.github.io/sds-hub/admin.html`. The invite flow opens a required password-creation dialog before the workspace.
 3. Apply migrations, then add that Auth UUID in the SQL editor:
 
 ```sql

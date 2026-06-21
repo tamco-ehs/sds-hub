@@ -1,5 +1,5 @@
 const SHELL_CACHE = "sds-shell-v1.5.0";
-const DOCUMENT_CACHE = "sds-documents-v1";
+const DOCUMENT_CACHE = "sds-documents-v2";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -25,7 +25,7 @@ self.addEventListener("activate", (event) => {
     caches.keys()
       .then((keys) => Promise.all(
         keys
-          .filter((key) => key.startsWith("sds-shell-") && key !== SHELL_CACHE)
+          .filter((key) => (key.startsWith("sds-shell-") && key !== SHELL_CACHE) || (key.startsWith("sds-documents-") && key !== DOCUMENT_CACHE))
           .map((key) => caches.delete(key))
       ))
       .then(() => self.clients.claim())

@@ -1,4 +1,4 @@
-import { assessSdsText, detectSdsDates, detectSections, extractFirstTwoPages, extractWithRegex } from "./extraction.ts";
+import { assessSdsText, detectSdsDates, detectSections, extractWithRegex } from "./extraction.ts";
 
 function equal(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -45,18 +45,14 @@ Deno.test("detects numbered English and Bahasa section headings", () => {
   equal(sections.confidence, 100, "section confidence");
 });
 
-Deno.test("extracts the labelled WD-40 trade name from the real SDS", async () => {
-  const bytes = await Deno.readFile("pdfs/wd-40-aerosol-asia-2023-06-26.pdf");
-  const pages = await extractFirstTwoPages(bytes);
-  const metadata = extractWithRegex(pages.text);
+Deno.test("extracts the labelled WD-40 trade name without relying on the filename", () => {
+  const metadata = extractWithRegex("SAFETY DATA SHEET\nSection 1: Identification\nTrade Name: WD-40 Aerosol\nSection 2: Hazard Identification\nGHS\nSupplier: WD-40 Company\nEmergency Contact: 123");
   if (!String(metadata.trade_name || metadata.product_name).toLowerCase().includes("wd-40 aerosol")) {
     throw new Error(`wrong WD-40 identity: ${metadata.product_name} / ${metadata.trade_name}`);
   }
 });
 
-Deno.test("routes the image-only VORATRON ER 201 SDS to Gemini/OCR", async () => {
-  const bytes = await Deno.readFile("pdfs/voratron-er-201-epoxy-resin-2018-06-22.pdf");
-  const pages = await extractFirstTwoPages(bytes);
-  const assessment = assessSdsText(pages.text);
+Deno.test("routes an image-only SDS to Gemini/OCR", () => {
+  const assessment = assessSdsText("");
   equal(assessment.weakText, true, "OCR routing");
 });

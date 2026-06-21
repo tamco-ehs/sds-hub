@@ -21,6 +21,7 @@
     </a>
     <div class="session-controls">
       <div id="connectionBadge" class="connection-badge">Not logged in</div>
+      <button id="changePasswordButton" class="header-action" type="button" hidden>Change password</button>
       <button id="logoutButton" class="header-action" type="button" hidden>Logout</button>
     </div>
   </header>
@@ -137,6 +138,17 @@
       <label>Reason/comment<textarea id="bulkReason" rows="3" required></textarea></label>
       <label>Typed confirmation<input id="bulkConfirmation" type="text" autocomplete="off" required></label>
       <div class="action-row"><button id="bulkCancelButton" class="secondary-action" type="button">Cancel</button><button id="bulkConfirmButton" class="danger-action" type="submit">Confirm</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="passwordDialog" class="confirmation-dialog">
+    <form id="passwordForm">
+      <h2 id="passwordDialogTitle">Set your password</h2>
+      <p>Use at least 12 characters. This password is handled directly by Supabase Auth and is never sent to the SDS API.</p>
+      <label>New password<input id="newPasswordInput" type="password" minlength="12" autocomplete="new-password" required></label>
+      <label>Confirm password<input id="confirmPasswordInput" type="password" minlength="12" autocomplete="new-password" required></label>
+      <p id="passwordError" class="login-error" role="alert" hidden></p>
+      <div class="action-row"><button id="passwordCancelButton" class="secondary-action" type="button">Cancel</button><button id="passwordSaveButton" class="primary-action" type="submit">Save password</button></div>
     </form>
   </dialog>
 

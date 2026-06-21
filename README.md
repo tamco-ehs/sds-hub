@@ -141,7 +141,7 @@ Only the Supabase publishable/anon key belongs in `assets/config.js`; it is inte
 
 1. In Supabase **Authentication > Providers**, enable Email/Password.
 2. Apply the database migrations before deploying the updated function.
-3. Create the first user in **Authentication > Users**.
+3. Invite the first user in **Authentication > Users** with the redirect URL set to `https://izzulwork1.github.io/sds-hub/admin.html`. The admin page will ask the invited user to create a password of at least 12 characters.
 4. Copy that user's UUID and register the first active administrator in the SQL editor:
 
 ```sql

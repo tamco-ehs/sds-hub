@@ -41,6 +41,7 @@ const state = {
 
 const elementIds = [
   "connectionBadge","connectionPanel","workspace","adminSidebar","loginForm","emailInput","passwordInput","loginButton","loginError","logoutButton",
+  "changePasswordButton","passwordDialog","passwordForm","passwordDialogTitle","newPasswordInput","confirmPasswordInput","passwordError","passwordCancelButton","passwordSaveButton",
   "dashboardCards","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","queueTable","reviewList",
   "reviewForm","reviewStatus","reviewTitle","reviewOriginal","reviewWarnings","reviewFields","reviewComment",
   "openOriginalButton","saveReviewButton","reextractButton","duplicateButton","archiveButton","rejectButton","approveButton",
@@ -59,15 +60,20 @@ async function initialize() {
     return;
   }
   state.supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
-    auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:false }
+    auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true }
   });
+  const passwordSetupRequired = /(?:type=invite|type=recovery)/i.test(`${location.search}${location.hash}`);
   state.supabase.auth.onAuthStateChange((event, session) => {
     state.session = session;
     if (event === "SIGNED_OUT") showLoggedOut();
+    if (session && passwordSetupRequired && ["SIGNED_IN","PASSWORD_RECOVERY","INITIAL_SESSION"].includes(event) && !elements.passwordDialog.open) showPasswordDialog(true);
   });
   const { data, error } = await state.supabase.auth.getSession();
   if (error) return showLoginError(error.message);
-  if (data.session) await authorizeSession(data.session);
+  if (data.session) {
+    if (passwordSetupRequired) { if (!elements.passwordDialog.open) showPasswordDialog(true); }
+    else await authorizeSession(data.session);
+  }
 }
 
 function bindEvents() {
@@ -75,6 +81,9 @@ function bindEvents() {
   document.querySelectorAll("[data-refresh]").forEach((button) => button.addEventListener("click", () => refreshView(button.dataset.refresh)));
   elements.loginForm.addEventListener("submit", handleAsync(login));
   elements.logoutButton.addEventListener("click", handleAsync(logout));
+  elements.changePasswordButton.addEventListener("click", () => showPasswordDialog(false));
+  elements.passwordCancelButton.addEventListener("click", () => elements.passwordDialog.close());
+  elements.passwordForm.addEventListener("submit", handleAsync(savePassword));
   elements.uploadForm.addEventListener("submit", uploadDocument);
   elements.masterSearchButton.addEventListener("click", handleAsync(loadMaster));
   elements.masterScope.addEventListener("change", handleAsync(loadMaster));
@@ -143,6 +152,7 @@ function showAuthorizedWorkspace() {
   elements.workspace.hidden = false;
   elements.adminSidebar.hidden = false;
   elements.logoutButton.hidden = false;
+  elements.changePasswordButton.hidden = false;
   elements.connectionBadge.textContent = `${state.profile.display_name} · ${state.profile.role.replace("EHS_", "")}`;
   elements.connectionBadge.classList.add("is-connected");
   hideLoginError();
@@ -152,7 +162,7 @@ function showLoggedOut() {
   state.session = null; state.profile = null; state.selectedId = ""; state.selectedDocument = null;
   clearSelection();
   elements.workspace.hidden = true; elements.adminSidebar.hidden = true; elements.connectionPanel.hidden = false;
-  elements.logoutButton.hidden = true; elements.connectionBadge.textContent = "Not logged in";
+  elements.logoutButton.hidden = true; elements.changePasswordButton.hidden = true; elements.connectionBadge.textContent = "Not logged in";
   elements.connectionBadge.classList.remove("is-connected");
 }
 
@@ -160,6 +170,37 @@ async function logout() {
   await state.supabase.auth.signOut({ scope:"local" });
   showLoggedOut();
 }
+
+function showPasswordDialog(required) {
+  elements.passwordDialogTitle.textContent = required ? "Create your administrator password" : "Change your password";
+  elements.passwordCancelButton.hidden = Boolean(required);
+  elements.newPasswordInput.value = ""; elements.confirmPasswordInput.value = "";
+  elements.passwordError.hidden = true; elements.passwordError.textContent = "";
+  elements.passwordDialog.showModal();
+}
+
+async function savePassword(event) {
+  event?.preventDefault();
+  const password = elements.newPasswordInput.value;
+  if (password.length < 12) return showPasswordError("Use at least 12 characters.");
+  if (password !== elements.confirmPasswordInput.value) return showPasswordError("The passwords do not match.");
+  elements.passwordSaveButton.disabled = true;
+  try {
+    const { data, error } = await state.supabase.auth.updateUser({ password });
+    if (error) throw error;
+    elements.passwordDialog.close();
+    history.replaceState(null, "", `${location.pathname}${location.search && !/type=/i.test(location.search) ? location.search : ""}`);
+    showToast("Password saved.");
+    if (!state.profile) {
+      const { data:sessionData } = await state.supabase.auth.getSession();
+      if (sessionData.session) await authorizeSession(sessionData.session);
+    }
+    return data;
+  } catch (error) { showPasswordError(error.message || "Password could not be updated."); }
+  finally { elements.passwordSaveButton.disabled = false; }
+}
+
+function showPasswordError(message) { elements.passwordError.textContent = message; elements.passwordError.hidden = false; }
 
 function showLoginError(message) { elements.loginError.textContent = message; elements.loginError.hidden = false; }
 function hideLoginError() { elements.loginError.hidden = true; elements.loginError.textContent = ""; }
