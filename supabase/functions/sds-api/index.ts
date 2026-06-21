@@ -3,6 +3,7 @@ import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
 import { insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
 import { downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
 import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, type Extraction } from "../_shared/schema.ts";
+import { computeValidity } from "../_shared/validity.ts";
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_AUDIT_LENGTH = 50000;
@@ -290,7 +291,7 @@ async function duplicateList(cors: Record<string, string> | null) {
 }
 
 async function publicCatalog(cors: Record<string, string> | null) {
-  const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,revision_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&order=product_name.asc.nullslast,trade_name.asc");
+  const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,revision_date,established_date,expiry_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&order=product_name.asc.nullslast,trade_name.asc");
   return json({
     schemaVersion: 1,
     updatedAt: new Date().toISOString().slice(0, 10),
@@ -301,6 +302,8 @@ async function publicCatalog(cors: Record<string, string> | null) {
       pdfUrl: row.approved_download_url,
       department: "Unassigned",
       revisionDate: /^\d{4}-\d{2}-\d{2}$/.test(String(row.revision_date || "")) ? row.revision_date : "",
+      establishedDate: /^\d{4}-\d{2}-\d{2}$/.test(String(row.established_date || "")) ? row.established_date : "",
+      expiryDate: /^\d{4}-\d{2}-\d{2}$/.test(String(row.expiry_date || "")) ? row.expiry_date : "",
       documentType: "SDS",
       manufacturer: row.manufacturer || row.supplier || "",
       language: row.language || "",
@@ -493,6 +496,7 @@ function metadataFromRow(row: Record<string, unknown>) {
 }
 
 function metadataColumns(metadata: Extraction) {
+  const validity = computeValidity(metadata.issue_date, metadata.revision_date);
   return {
     is_likely_sds: metadata.is_likely_sds,
     product_name: metadata.product_name,
@@ -502,6 +506,8 @@ function metadataColumns(metadata: Extraction) {
     language: metadata.language,
     issue_date: metadata.issue_date,
     revision_date: metadata.revision_date,
+    established_date: validity.establishedDate,
+    expiry_date: validity.expiryDate,
     cas_numbers: metadata.cas_numbers,
     signal_word: metadata.signal_word,
     ghs_pictograms: metadata.ghs_pictograms,

@@ -148,9 +148,11 @@ export function mergeExtraction(regexResult: Extraction, geminiResult: Extractio
       merged[key] = hasValue(geminiValue) ? geminiValue : (regexValue ?? merged[key]);
     }
   }
-  // A labelled Trade Name in Section 1 is a stronger formal product identifier than a
-  // model-inferred generic Chemical Name (for example, "Organic Mixture").
-  if (!regexResult.product_name && regexResult.trade_name) merged.product_name = regexResult.trade_name;
+  // Choose the best Section-1 product identifier: prefer a labelled product/trade
+  // name over a generic chemical name (e.g. "Organic Mixture"), cleaned of SDS/version
+  // junk. Falls through regex then Gemini candidates.
+  const chosenName = chooseProductName(regexResult, geminiResult);
+  if (chosenName) merged.product_name = chosenName;
   merged.is_likely_sds = Boolean(regexResult.is_likely_sds || geminiResult?.is_likely_sds);
   merged.possible_duplicate_flag = Boolean(options.duplicate);
   merged.extraction_confidence = Math.max(regexResult.extraction_confidence || 0, geminiResult?.extraction_confidence || 0);
@@ -215,6 +217,38 @@ function inferPictograms(text: string) {
 function detectLanguage(text: string) {
   const normalized = String(text || "").toLowerCase();
   return ["helaian data keselamatan", "bahaya", "pembekal", "kegunaan yang disarankan"].some((term) => normalized.includes(term)) ? "Malay" : "English";
+}
+
+const GENERIC_NAMES = new Set([
+  "organic mixture", "chemical mixture", "mixture", "preparation", "substance", "product",
+  "article", "not available", "not applicable", "n/a", "na", "none", "sds", "msds",
+  "safety data sheet", "material safety data sheet"
+]);
+
+function isGenericName(value: unknown) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return !normalized || normalized.length < 2 || GENERIC_NAMES.has(normalized);
+}
+
+// Clean a Section-1 product/trade name of labels and SDS/version junk. Returns null
+// if nothing usable or the result is a generic chemical descriptor.
+function cleanProductName(value: unknown) {
+  let name = cleanValue(value);
+  if (!name) return null;
+  name = name.replace(/^(?:product\s*name|trade\s*name|material\s*name|product\s*identifier)\s*[:\-]?\s*/i, "");
+  name = name.replace(/[\s\-_(]*\b(?:m?sds|safety data sheet|material safety data sheet)\b[\s\-_)]*$/i, "");
+  name = name.replace(/\s*[-_]?\s*(?:v(?:er(?:sion)?)?\.?\s*\d+|rev(?:ision)?\.?\s*[\w.]+)\s*$/i, "");
+  name = name.replace(/\s+/g, " ").replace(/[\s\-_(]+$/, "").trim();
+  return name && !isGenericName(name) ? name.slice(0, 200) : null;
+}
+
+function chooseProductName(regexResult: Extraction, geminiResult: Extraction | null) {
+  const candidates = [regexResult?.product_name, regexResult?.trade_name, geminiResult?.product_name, geminiResult?.trade_name];
+  for (const candidate of candidates) {
+    const cleaned = cleanProductName(candidate);
+    if (cleaned) return cleaned;
+  }
+  return null;
 }
 function hasValue(value: unknown) { return Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== ""; }
 function uniqueValues(values: unknown[]) { return [...new Set((values || []).filter(Boolean).map((value) => String(value).trim()).filter(Boolean))]; }

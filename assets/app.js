@@ -6,8 +6,16 @@ import {
   languageLabel,
   resolveDepartment,
   resolveLanguage,
-  sanitizeCatalog
+  sanitizeCatalog,
+  validityStatus
 } from "./catalog-utils.js";
+
+const VALIDITY_LABELS = {
+  valid: "Valid",
+  expiring: "Expiring soon",
+  expired: "Expired",
+  unknown: "Verify validity"
+};
 
 const DATA_URL = "./data/sds-data.json";
 const DOCUMENT_CACHE = "sds-documents-v1";
@@ -45,6 +53,7 @@ const elements = {
   detailPanel: document.querySelector("#detailPanel"),
   detailDepartment: document.querySelector("#detailDepartment"),
   detailRevision: document.querySelector("#detailRevision"),
+  detailValidity: document.querySelector("#detailValidity"),
   detailTitle: document.querySelector("#detailTitle"),
   detailManufacturer: document.querySelector("#detailManufacturer"),
   detailProductCode: document.querySelector("#detailProductCode"),
@@ -307,6 +316,16 @@ function createResultItem(documentRecord) {
     meta.append(language);
   }
 
+  const validity = validityStatus(documentRecord);
+  if (validity.state !== "valid") {
+    const badge = document.createElement("span");
+    badge.className = `result-validity result-validity--${validity.state}`;
+    badge.textContent = validity.state === "expired"
+      ? "Expired"
+      : validity.state === "expiring" ? "Expiring soon" : "Verify validity";
+    meta.append(badge);
+  }
+
   department.className = "result-department";
   department.textContent = documentRecord.department;
 
@@ -349,6 +368,7 @@ function showDocument(documentRecord, { updateHistory = true, scroll = true } = 
     : "Revision date not stated";
   elements.detailRevision.textContent = `${documentRecord.documentType} - ${revisionLabel}`;
   elements.detailTitle.textContent = documentRecord.name;
+  setValidity(documentRecord);
 
   setMetadata(elements.manufacturerRow, elements.detailManufacturer, documentRecord.manufacturer);
   setMetadata(elements.productCodeRow, elements.detailProductCode, documentRecord.productCode);
@@ -407,6 +427,22 @@ function showDetailPlaceholder() {
 function setMetadata(row, valueElement, value) {
   row.hidden = !value;
   valueElement.textContent = value || "";
+}
+
+function setValidity(documentRecord) {
+  const element = elements.detailValidity;
+  if (!element) return;
+  const status = validityStatus(documentRecord);
+  element.className = `validity-line validity-${status.state}`;
+  if (status.state === "unknown") {
+    element.textContent = "Validity unknown - verify the revision date on the official SDS.";
+  } else if (status.state === "expired") {
+    element.textContent = `Expired ${formatRevisionDate(status.expiryDate)} - confirm a current SDS with the safety manager.`;
+  } else if (status.state === "expiring") {
+    element.textContent = `Valid until ${formatRevisionDate(status.expiryDate)} (expiring soon).`;
+  } else {
+    element.textContent = `Valid until ${formatRevisionDate(status.expiryDate)}.`;
+  }
 }
 
 function updateUrl({ replace }) {

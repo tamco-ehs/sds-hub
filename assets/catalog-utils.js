@@ -20,7 +20,7 @@ export function isValidDocument(document) {
   if (!legacyFilename && !controlledFilename) return false;
   if (document.revisionDate != null && document.revisionDate !== "" && !isIsoDate(document.revisionDate)) return false;
 
-  const optionalStrings = ["manufacturer", "productCode", "location", "language", "pdfUrl"];
+  const optionalStrings = ["manufacturer", "productCode", "location", "language", "pdfUrl", "establishedDate", "expiryDate"];
   if (optionalStrings.some((key) => document[key] != null && typeof document[key] !== "string")) return false;
   if (document.documentType != null && !["SDS", "TDS", "Unverified"].includes(document.documentType)) return false;
   if (document.hazards != null && (!Array.isArray(document.hazards) || document.hazards.some((item) => typeof item !== "string"))) return false;
@@ -51,6 +51,8 @@ export function sanitizeCatalog(documents) {
       location: document.location?.trim() || "",
       language: document.language?.trim() || "",
       pdfUrl: document.pdfUrl?.trim() || "",
+      establishedDate: document.establishedDate?.trim() || "",
+      expiryDate: document.expiryDate?.trim() || "",
       hazards: Object.freeze((document.hazards || []).map((item) => item.trim()).filter(Boolean))
     }))
     .sort((left, right) => collator.compare(left.name, right.name));
@@ -121,4 +123,33 @@ export function formatRevisionDate(date, locale = "en") {
 export function resolveDepartment(requested, departments) {
   if (!requested) return "All";
   return departments.find((department) => department.toLocaleLowerCase("en") === requested.toLocaleLowerCase("en")) || "All";
+}
+
+export const SDS_VALIDITY_YEARS = 5;
+
+export function addYears(isoDate, years) {
+  if (!isIsoDate(isoDate)) return "";
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const target = new Date(Date.UTC(year + years, month - 1, day));
+  if (target.getUTCMonth() !== month - 1) target.setUTCDate(0); // Feb 29 -> Feb 28
+  return target.toISOString().slice(0, 10);
+}
+
+// Effective expiry for a document: an explicit expiryDate from the intake system,
+// otherwise the revision date + 5 years. Empty string means it cannot be determined.
+export function getExpiryDate(documentRecord) {
+  if (isIsoDate(documentRecord?.expiryDate)) return documentRecord.expiryDate;
+  return addYears(documentRecord?.revisionDate, SDS_VALIDITY_YEARS);
+}
+
+// Validity state for display: "valid", "expiring" (within warnDays), "expired",
+// or "unknown" when no usable date exists (never guessed).
+export function validityStatus(documentRecord, now = new Date(), warnDays = 180) {
+  const expiryDate = getExpiryDate(documentRecord);
+  if (!expiryDate) return { state: "unknown", expiryDate: "" };
+  const expiryMs = Date.parse(`${expiryDate}T00:00:00Z`);
+  const todayMs = Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`);
+  if (todayMs > expiryMs) return { state: "expired", expiryDate };
+  if (expiryMs - todayMs <= warnDays * 86400000) return { state: "expiring", expiryDate };
+  return { state: "valid", expiryDate };
 }
