@@ -317,7 +317,13 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
   // Single deduplicated reason built from the classifier (which already handles numeric-section
   // completeness, legacy MSDS, missing fields, conflicts and date warnings) plus extraction errors.
   const reasonParts = [...classification.reasons];
-  if (geminiError) reasonParts.push(friendlyExtractionNote(geminiError));
+  // Only surface an AI/OCR gap as a review issue when it actually matters: the PDF needed OCR, or
+  // rule-based extraction is itself weak. A readable SDS with solid rule fields is not a failure
+  // just because the AI step timed out (the status is still recorded in ai_verification_status).
+  const ocrRequired = assessment.weakText || Boolean(textError);
+  if (geminiError && (ocrRequired || merged.missing_fields.length > 0 || merged.extraction_confidence < 85)) {
+    reasonParts.push(friendlyExtractionNote(geminiError, ocrRequired));
+  }
   if (textError) reasonParts.push(`PDF text extraction failed: ${textError}`);
   reasonParts.push("EHS approval is required before publication");
   merged.review_required_reason = [...new Set(reasonParts.filter(Boolean))].join(". ");
@@ -1066,9 +1072,19 @@ function cleanComment(value: unknown) { return String(value || "").replace(/[\r\
 async function readJson(request: Request): Promise<Record<string, any>> { try { return await request.json(); } catch { return {}; } }
 function safeError(error: unknown) { return String((error as Error)?.message || error || "Unknown error").replace(/[\r\n\t]+/g, " ").slice(0, 500); }
 // Reviewer-facing wording for AI fallback failures. The raw provider error is still kept in sds_extraction_logs.
-function friendlyExtractionNote(geminiError: string) {
-  if (/\b429\b|quota|rate.?limit/i.test(geminiError)) return "AI OCR was temporarily unavailable (quota limit reached); please verify the fields manually.";
-  return "AI OCR fallback was unavailable; please verify the fields manually.";
+function friendlyExtractionNote(geminiError: string, ocrRequired: boolean) {
+  const quota = /\b429\b|quota|rate.?limit|resource.?exhausted/i.test(geminiError);
+  const timeout = /abort|timeout|timed out/i.test(geminiError);
+  if (ocrRequired) {
+    // Text was weak/scanned, so AI/OCR was genuinely needed — this one does warrant manual checking.
+    return quota
+      ? "AI/OCR assistance was temporarily unavailable (quota limit); this scanned or low-text PDF needs manual verification."
+      : "AI/OCR assistance unavailable; this scanned or low-text PDF needs manual verification.";
+  }
+  // Readable PDF: rule-based extraction stands on its own; the AI gap is informational, not a failure.
+  if (quota) return "AI assistance was temporarily unavailable (quota limit); rule-based extraction was used.";
+  if (timeout) return "AI assistance unavailable (timed out); rule-based extraction was used.";
+  return "AI assistance unavailable; rule-based extraction was used.";
 }
 
 function geminiVerificationStatus(needed: boolean, key: string, result: Extraction | null, error: string, allowed: boolean) {

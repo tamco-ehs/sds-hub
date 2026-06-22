@@ -1,4 +1,5 @@
 import type { Extraction } from "./schema.ts";
+import { toIsoDate } from "./extraction.ts";
 
 export const REVIEW_DECISIONS = [
   "no_review_required_existing_unchanged",
@@ -122,8 +123,11 @@ export function findExtractionConflicts(regex: Extraction, ai: Extraction | null
   if (ruleNames.length && aiNames.length && !ruleNames.some((rule) => aiNames.some((value) => productNamesAlign(rule, value)))) {
     conflicts.push("Rule and AI extraction disagree on product name");
   }
+  // Compare dates by calendar value (ISO), never by surface format, and only the SAME label type —
+  // so "2016-03-31" vs "31/03/2016" is not a conflict, and supersedes/issue/prep are never cross-compared.
   for (const field of ["revision_date", "issue_date"] as (keyof Extraction)[]) {
-    const left = normalized(regex[field]); const right = normalized(ai[field]);
+    const left = toIsoDate(regex[field]) || normalized(regex[field]);
+    const right = toIsoDate(ai[field]) || normalized(ai[field]);
     if (left && right && left !== right) conflicts.push(`Rule and AI extraction disagree on ${String(field).replaceAll("_", " ")}`);
   }
   const ruleSignal = normalized(regex.signal_word); const aiSignal = normalized(ai.signal_word);

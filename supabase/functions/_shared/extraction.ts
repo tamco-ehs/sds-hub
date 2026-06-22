@@ -291,6 +291,12 @@ function normalizeSdsDate(raw: string) {
   return { value: `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`, warning };
 }
 
+// Parse any supported SDS date string to ISO (YYYY-MM-DD), or "" if unparseable. Used to compare
+// rule vs AI dates by calendar value rather than surface format ("2016-03-31" === "31/03/2016").
+export function toIsoDate(value: unknown): string {
+  return normalizeSdsDate(String(value ?? "")).value || "";
+}
+
 function validCalendarDate(year: number, month: number, day: number) {
   if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return false;
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -335,6 +341,11 @@ export function extractWithRegex(text: string) {
   result.recommended_use = firstLabel(text, ["Recommended use", "Product use", "Identified uses", "Kegunaan yang disarankan"]);
   const rawSignal = firstMatch(text, /\b(DANGER|WARNING|AMARAN|BAHAYA)\b/i)?.toUpperCase() || null;
   result.signal_word = rawSignal === "BAHAYA" ? "DANGER" : rawSignal === "AMARAN" ? "WARNING" : rawSignal;
+  // A product explicitly not classified as hazardous has no GHS signal word by design — record that
+  // fact so the absent signal word is informative, not a false "missing field" (e.g. VT-210).
+  if (!result.signal_word && /\bnot\s+classified\b|\bnot\s+(?:a\s+)?hazardous\b|not classified as (?:a\s+)?(?:dangerous|hazardous)|non-hazardous|tidak\s+dikelaskan|bukan\s+(?:bahan\s+)?berbahaya/i.test(text)) {
+    result.signal_word = "Not classified";
+  }
   result.language = detectLanguage(text);
   result.cas_numbers = uniqueMatches(text, /\b\d{2,7}-\d{2}-\d\b/g);
   result.hazard_statements = extractStatements(text, /\bH\d{3}(?:\+H\d{3})?\b[^\n]*/gi);

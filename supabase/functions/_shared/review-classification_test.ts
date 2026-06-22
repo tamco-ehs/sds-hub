@@ -75,3 +75,15 @@ Deno.test("rule and AI disagreement is preserved as a conflict", () => {
   const conflicts = findExtractionConflicts(rule, ai);
   if (!conflicts.some((item) => item.includes("product name"))) throw new Error("product-name conflict was not detected");
 });
+
+Deno.test("date conflict compares calendar value, not surface format (ULTIMEG)", () => {
+  const rule = { ...completeMetadata(), revision_date: "2016-03-31" };
+  const sameDateOtherFormat = { ...completeMetadata(), revision_date: "31/03/2016" };
+  if (findExtractionConflicts(rule, sameDateOtherFormat).some((item) => item.includes("revision date"))) {
+    throw new Error("same calendar date in different formats must not raise a conflict");
+  }
+  const differentDate = { ...completeMetadata(), revision_date: "2015-07-24" };
+  if (!findExtractionConflicts(rule, differentDate).some((item) => item.includes("revision date"))) {
+    throw new Error("genuinely different revision dates must still raise a conflict");
+  }
+});
