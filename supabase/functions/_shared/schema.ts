@@ -22,6 +22,7 @@ export const extractionSchema = z.object({
   print_date: nullableDateText,
   effective_date: nullableDateText,
   establishment_date: nullableDateText,
+  supersedes_date: nullableDateText,
   detected_date_source: nullableShortText.default(null),
   detected_date_confidence: z.number().min(0).max(100).default(0),
   validity_date_basis: z.enum(["revision_date","issue_date","preparation_date","establishment_date","effective_date","print_date"]).nullable().default(null),
@@ -49,7 +50,7 @@ export type Extraction = z.infer<typeof extractionSchema>;
 
 export const EDITABLE_FIELDS = [
   "product_name", "trade_name", "supplier", "manufacturer", "language", "issue_date", "revision_date",
-  "preparation_date", "print_date", "effective_date", "establishment_date", "detected_date_source",
+  "preparation_date", "print_date", "effective_date", "establishment_date", "supersedes_date", "detected_date_source",
   "detected_date_confidence", "validity_date_basis", "validity_date_value", "date_detection_warnings",
   "cas_numbers", "signal_word", "ghs_pictograms", "hazard_statements", "precautionary_statements",
   "recommended_use", "ppe_recommendation", "storage_summary", "first_aid_summary", "spill_response_summary",
@@ -75,6 +76,7 @@ export function emptyExtraction(): Extraction {
     print_date: null,
     effective_date: null,
     establishment_date: null,
+    supersedes_date: null,
     detected_date_source: null,
     detected_date_confidence: 0,
     validity_date_basis: null,

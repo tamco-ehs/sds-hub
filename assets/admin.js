@@ -52,6 +52,19 @@ const GROUP_STATUS_LABELS = {
   unlinked:"Not grouped", suggested:"Possible language variant — needs EHS decision",
   linked:"Linked as a language variant", separate:"Kept as a separate SDS"
 };
+// Ordered buckets for grouping the review reasons; each reason lands in the first category it matches.
+const REVIEW_CATEGORIES = [
+  ["Identity", /product\s*name|trade\s*name|\bidentity\b|not\s+sds|replace file/i],
+  ["Supplier / manufacturer", /supplier|manufacturer|pembekal/i],
+  ["Date & revision", /\bdate\b|revision|issued?|preparation|prepared|expir|supersed|ambiguous|validity|month precision|2-?digit/i],
+  ["Section completeness", /section|incomplete|of 16/i],
+  ["SDS format", /legacy|msds|non-?standard|standard.*order|format|alignment/i],
+  ["Hazard severity", /hazard|signal word|\bdanger\b|toxic|corros|flammable|oxidi|explos|carcinogen|mutagen|high-risk|high-consequence/i],
+  ["Language variant", /language variant|bilingual|english version|bahasa melayu version/i],
+  ["Duplicate", /duplicate/i],
+  ["AI / OCR status", /\bai\b|ocr|gemini|rule-based|assistance|scanned|image-only/i],
+  ["EHS action", /approval|ehs|publication|confirm|before publication/i]
+];
 
 const state = {
   apiUrl:String(config.adminApiUrl || "").replace(/\/$/, ""), supabase:null, session:null, profile:null,
@@ -328,19 +341,45 @@ async function openReview(documentId) {
 function renderReviewForm(record) {
   elements.reviewStatus.textContent = record.status; elements.reviewStatus.dataset.status = record.status;
   elements.reviewTitle.textContent = displayName(record); elements.reviewOriginal.textContent = `Original: ${record.original_filename}`;
-  const warnings = [
-    record.ocr_required ? "PDF text was weak or image-only. OCR or visual verification is required." : "",
-    record.possible_duplicate_flag ? `Possible duplicate${record.duplicate_of_id ? ` of ${record.duplicate_of_id}` : ""}.` : "",
-    ...(Array.isArray(record.date_detection_warnings) ? record.date_detection_warnings : []),
-    ...(Array.isArray(record.review_reasons) ? record.review_reasons : []),
-    ...(Array.isArray(record.extraction_conflicts) ? record.extraction_conflicts : []),
-    record.review_required_reason || ""
-  ].filter(Boolean);
-  elements.reviewWarnings.hidden = !warnings.length; elements.reviewWarnings.textContent = [...new Set(warnings)].join("\n");
+  renderReviewWarnings(record);
   const evidence = buildEvidenceSummary(record.evidence_snippets);
   const grouping = buildGroupingCard(record, state.selectedGroup);
   elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(grouping ? [grouping] : []), ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
   elements.reviewComment.value = "";
+}
+
+// Group the review reasons into labelled categories so the same issue never shows twice and the
+// reviewer can scan by concern. review_required_reason (the joined summary) is only a fallback.
+function renderReviewWarnings(record) {
+  const reasons = [...new Set([
+    record.ocr_required ? "PDF text was weak or image-only; OCR or visual verification is required." : "",
+    record.possible_duplicate_flag ? `Possible duplicate${record.duplicate_of_id ? ` of ${record.duplicate_of_id}` : ""}.` : "",
+    ...(Array.isArray(record.review_reasons) ? record.review_reasons : []),
+    ...(Array.isArray(record.extraction_conflicts) ? record.extraction_conflicts : []),
+    ...(Array.isArray(record.date_detection_warnings) ? record.date_detection_warnings : []),
+    ...((!Array.isArray(record.review_reasons) || !record.review_reasons.length) && record.review_required_reason ? String(record.review_required_reason).split(/\.\s+/) : [])
+  ].map((reason) => String(reason).trim()).filter(Boolean))];
+
+  elements.reviewWarnings.replaceChildren();
+  elements.reviewWarnings.hidden = reasons.length === 0;
+  if (!reasons.length) return;
+
+  const buckets = new Map();
+  for (const reason of reasons) {
+    const category = (REVIEW_CATEGORIES.find(([, pattern]) => pattern.test(reason)) || ["Other"])[0];
+    if (!buckets.has(category)) buckets.set(category, []);
+    if (!buckets.get(category).includes(reason)) buckets.get(category).push(reason);
+  }
+  for (const [category] of [...REVIEW_CATEGORIES, ["Other"]]) {
+    const items = buckets.get(category);
+    if (!items || !items.length) continue;
+    const group = node("div", { className:"review-issue-group" });
+    group.append(node("span", { className:"review-issue-category", textContent:category }));
+    const list = node("ul", { className:"review-issue-list" });
+    for (const item of items) list.append(node("li", { textContent:item }));
+    group.append(list);
+    elements.reviewWarnings.append(group);
+  }
 }
 
 // EHS language-variant grouping: detected language, a possible-variant suggestion with side-by-side
@@ -425,6 +464,7 @@ function buildValiditySummary(record) {
     summaryRow("Revision date", record.revision_date || "Not detected"), summaryRow("Issue date", record.issue_date || "Not detected"),
     summaryRow("Preparation date", record.preparation_date || "Not detected"), summaryRow("Establishment date", record.establishment_date || "Not detected"),
     summaryRow("Effective date", record.effective_date || "Not detected"), summaryRow("Print date", record.print_date || "Not detected", record.validity_date_basis === "print_date"),
+    summaryRow("Supersedes (previous SDS)", record.supersedes_date || "Not stated"),
     summaryRow("Validity basis", DATE_BASIS_LABELS[record.validity_date_basis] || "Not established", !record.validity_date_basis || record.validity_date_basis === "print_date"),
     summaryRow("Validity date", record.validity_date_value || record.established_date || "Not established", !record.validity_date_value),
     summaryRow("Date confidence", `${record.detected_date_confidence || 0}%`, (record.detected_date_confidence || 0) < 70),

@@ -927,6 +927,7 @@ function metadataColumns(metadata: Extraction) {
     print_date: metadata.print_date,
     effective_date: metadata.effective_date,
     establishment_date: metadata.establishment_date,
+    supersedes_date: metadata.supersedes_date,
     detected_date_source: metadata.detected_date_source,
     detected_date_confidence: Math.round(metadata.detected_date_confidence),
     validity_date_basis: derivedBasis,

@@ -160,7 +160,7 @@ function hasAlignedTitle(source: string, section: number) {
   });
 }
 
-type DateField = "revision_date" | "issue_date" | "preparation_date" | "print_date" | "effective_date" | "establishment_date";
+type DateField = "revision_date" | "issue_date" | "preparation_date" | "print_date" | "effective_date" | "establishment_date" | "supersedes_date";
 
 const DATE_LABELS: Record<DateField, string[]> = {
   revision_date: ["Revision date", "Revised date", "Date of revision", "Tarikh ulasan", "Tarikh semakan", "Tarikh disemak", "Revision"],
@@ -168,10 +168,12 @@ const DATE_LABELS: Record<DateField, string[]> = {
   preparation_date: ["Date of preparation", "SDS Date Of Preparation", "Date of Preparation/Revision", "Preparation date", "Prepared date", "Date prepared", "Tarikh penyediaan", "Tarikh disediakan"],
   print_date: ["Print date", "Printed date", "Printing date", "Tarikh cetakan", "Tarikh dicetak"],
   effective_date: ["Effective date", "Publication date", "SDS date", "Created date", "Creation date", "Tarikh kuat kuasa", "Tarikh penerbitan"],
-  establishment_date: ["Establishment date", "Date of establishment"]
+  establishment_date: ["Establishment date", "Date of establishment"],
+  supersedes_date: ["Supersedes date", "Supersedes Issue Dated", "Supersede date", "Supersedes edition dated", "Replaces edition of", "Replaces date", "Date superseded", "Supersedes", "Replaces", "Tarikh menggantikan", "Menggantikan"]
 };
 
-const DATE_PRIORITY: DateField[] = ["revision_date", "issue_date", "preparation_date", "establishment_date", "effective_date", "print_date"];
+// Validity basis never includes supersedes_date (that is the previous edition, not a current date).
+const DATE_PRIORITY: Exclude<DateField, "supersedes_date">[] = ["revision_date", "issue_date", "preparation_date", "establishment_date", "effective_date", "print_date"];
 const MONTHS: Record<string, number> = {
   jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
   may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9,
@@ -183,12 +185,13 @@ export function detectSdsDates(text: string) {
   const source = String(text || "");
   const dates: Record<DateField, string | null> = {
     revision_date: null, issue_date: null, preparation_date: null,
-    print_date: null, effective_date: null, establishment_date: null
+    print_date: null, effective_date: null, establishment_date: null, supersedes_date: null
   };
   const labels: Partial<Record<DateField, string>> = {};
   const warnings: string[] = [];
   // Columnised header (stacked labels, then a block of ": value" rows) — map by position first.
   zipVerticalDates(source, dates, labels);
+  detectSupersedesDate(source, dates, labels);
 
   for (const field of DATE_PRIORITY) {
     if (dates[field]) continue;
@@ -201,6 +204,7 @@ export function detectSdsDates(text: string) {
       if (!match) continue;
       const normalized = normalizeSdsDate(match[1]);
       if (!normalized.value) continue;
+      if (dates.supersedes_date && normalized.value === dates.supersedes_date) continue; // never let the superseded date stand in for revision/issue
       dates[field] = normalized.value;
       labels[field] = label;
       if (normalized.warning) warnings.push(`${label}: ${normalized.warning}`);
@@ -210,7 +214,7 @@ export function detectSdsDates(text: string) {
 
   const basis = DATE_PRIORITY.find((field) => dates[field]) || null;
   const value = basis ? dates[basis] : null;
-  const uniqueDates = [...new Set(Object.values(dates).filter(Boolean))];
+  const uniqueDates = [...new Set(DATE_PRIORITY.map((field) => dates[field]).filter(Boolean))]; // supersedes_date excluded — it is the previous SDS, not a competing current date
   if (uniqueDates.length > 1) warnings.push("Multiple SDS dates detected. Please confirm the correct validity basis.");
   if (basis === "print_date") warnings.push("Print date is being used only because no better SDS date was found. EHS confirmation is required.");
   const confidence = !basis ? 0 : basis === "print_date" ? 35 : uniqueDates.length > 1 ? 65 : 90;
@@ -222,6 +226,23 @@ export function detectSdsDates(text: string) {
     validity_date_value: value,
     date_detection_warnings: [...new Set(warnings)]
   };
+}
+
+// Supersedes/replaces date: the date of the PREVIOUS SDS edition. Detected on its own pass so it is
+// never picked up as the live revision/issue date, nor compared against them as a conflict.
+function detectSupersedesDate(source: string, dates: Record<DateField, string | null>, labels: Partial<Record<DateField, string>>) {
+  if (dates.supersedes_date) return;
+  for (const label of DATE_LABELS.supersedes_date.sort((a, b) => b.length - a.length)) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = source.match(new RegExp(`(?:^|\\n|\\r|\\b)${escaped}\\s*(?:[:#]|[-–—])?\\s*(${DATE_VALUE_PATTERN})`, "i"))
+      || source.match(new RegExp(`${escaped}\\b[\\s\\S]{0,80}?(${DATE_VALUE_PATTERN})`, "i"));
+    if (!match) continue;
+    const normalized = normalizeSdsDate(match[1]);
+    if (!normalized.value) continue;
+    dates.supersedes_date = normalized.value;
+    labels.supersedes_date = label;
+    return;
+  }
 }
 
 // Columnised header: labels stacked on consecutive lines, then a block of ": value" rows. Map each
@@ -329,6 +350,7 @@ export function extractWithRegex(text: string) {
   result.manufacturer = firstLabel(text, ["Manufacturer's Name", "Manufacturers Name", "Manufacturer name", "Manufacturer", "Manufactured by", "Manufacturer / Supplier", "Pengilang"]);
   result.issue_date = dates.issue_date;
   result.revision_date = dates.revision_date;
+  result.supersedes_date = dates.supersedes_date;
   result.preparation_date = dates.preparation_date;
   result.print_date = dates.print_date;
   result.effective_date = dates.effective_date;

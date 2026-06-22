@@ -31,6 +31,15 @@ Deno.test("flags conflicting SDS dates", () => {
   if (!dates.date_detection_warnings.some((warning) => warning.includes("Multiple SDS dates"))) throw new Error("missing conflict warning");
 });
 
+Deno.test("captures a supersedes date without polluting revision or raising a false conflict (ULTIMEG)", () => {
+  const dates = detectSdsDates("Revision date: 31/03/2016\nRevision No: 18\nSupersedes: 24/07/2015");
+  equal(dates.revision_date, "2016-03-31", "revision date is the live edition, not the superseded one");
+  equal(dates.supersedes_date, "2015-07-24", "supersedes date captured separately");
+  if (dates.date_detection_warnings.some((warning) => warning.includes("Multiple SDS dates"))) {
+    throw new Error("the superseded date must not count as a competing current date");
+  }
+});
+
 Deno.test("detects numbered English and Bahasa section headings", () => {
   const headings = [
     "SECTION 1: Identification", "SECTION 2: Hazard identification", "SECTION 3: Composition / information on ingredients",

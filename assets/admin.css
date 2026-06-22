@@ -22,6 +22,11 @@
 .variant-compare td:first-child{color:var(--muted);font-weight:750;white-space:nowrap}
 .variant-list{margin:6px 0 0;padding-left:18px;font-size:.76rem;line-height:1.5}
 .variant-list strong{color:var(--navy-900)}
+.review-issue-group{margin-bottom:9px}
+.review-issue-group:last-child{margin-bottom:0}
+.review-issue-category{display:block;margin-bottom:2px;color:#6b4700;font-size:.6rem;font-weight:850;letter-spacing:.05em;text-transform:uppercase}
+.review-issue-list{margin:0;padding-left:18px;font-size:.74rem;line-height:1.45}
+.review-issue-list li{margin:1px 0}
 .upload-row td:nth-child(2){font-weight:800;text-transform:capitalize}
 .upload-row-processed td:nth-child(2){color:var(--green)}
 .upload-row-duplicate td:nth-child(2){color:#704c00}
