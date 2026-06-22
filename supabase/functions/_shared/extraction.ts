@@ -8,7 +8,14 @@ const SDS_KEYWORDS = [
   "cas no", "ghs", "hazard statement", "precautionary statement", "manufacturer", "supplier", "emergency contact"
 ];
 
-const GEMINI_PROMPT = `Extract information from this Safety Data Sheet text. Return JSON only. Do not invent missing data. If a field is not found, return null. Identify the formal product name exactly as written in the SDS. Also identify whether the file is likely a valid SDS. Provide confidence score from 0 to 100 and explain review_required_reason in short text.`;
+const GEMINI_PROMPT = `Extract information from this Safety Data Sheet (SDS/MSDS) and return JSON only matching the schema. Do not invent data; if a field is not found, return null.
+Rules:
+- Product name: take it from the document header or Section 1 (product identifier / trade name) exactly as written. Never use a file name.
+- Supplier: use supplier, manufacturer, company, or responsible party. A manufacturer alone is acceptable as the responsible party.
+- Dates: capture the dates as written; do not turn a preparation date into a revision date.
+- Sections: do NOT mark a section missing only because its title differs from modern GHS/CLASS wording. First confirm the numeric headings SECTION 1 to SECTION 16. If all numeric sections exist but the topic order differs, it is a legacy MSDS / non-standard order, NOT an incomplete SDS.
+- You only extract and summarise. Do not decide section completeness, duplicates, or publication status; the application decides those with deterministic rules.
+Provide extraction_confidence 0-100 and a short review_required_reason.`;
 
 const GEMINI_RESPONSE_SCHEMA = {
   type: "OBJECT",
@@ -104,18 +111,45 @@ const SDS_SECTION_KEYWORDS: Record<number, string[]> = {
   16: ["other information", "maklumat lain", "maklumat tambahan"]
 };
 
+// Two independent checks, so a complete legacy MSDS is never reported as "incomplete":
+//   - NUMERIC completeness: is the heading "SECTION N" / "N." present, regardless of title?
+//   - TOPIC alignment: does section N carry its modern GHS/CLASS title keyword?
+// A document is only "missing" a section when the NUMBER is absent. If all 16 numbers are
+// present but several titles do not align with the modern order, it is a legacy / non-standard
+// MSDS (hold for EHS review), not an incomplete SDS.
 export function detectSections(text: string) {
-  const source = String(text || "").toLowerCase();
+  const source = String(text || "");
   const found: number[] = [];
   const missing: number[] = [];
+  const topicAligned: number[] = [];
   for (let section = 1; section <= 16; section += 1) {
-    const keywordHeading = SDS_SECTION_KEYWORDS[section].some((keyword) => {
-      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(`(?:section\\s*)?0?${section}\\s*(?:[.\\-:\u2013\u2014]|\\s)[^\\n]{0,100}${escaped}`, "im").test(source);
-    });
-    (keywordHeading ? found : missing).push(section);
+    (hasNumericSection(source, section) ? found : missing).push(section);
+    if (hasAlignedTitle(source, section)) topicAligned.push(section);
   }
-  return { found, missing, confidence: Math.round((found.length / 16) * 100) };
+  const numericComplete = missing.length === 0;
+  const missingTopics: number[] = [];
+  for (let section = 1; section <= 16; section += 1) if (!topicAligned.includes(section)) missingTopics.push(section);
+  // Numerically whole but several titles out of modern order -> treat as legacy MSDS.
+  const legacyMsds = numericComplete && topicAligned.length < 14;
+  return {
+    found, missing, confidence: Math.round((found.length / 16) * 100),
+    topicAligned, missingTopics, numericComplete, legacyMsds
+  };
+}
+
+// "SECTION N" (any language) or a numbered heading "N. Title" at the start of a line.
+function hasNumericSection(source: string, section: number) {
+  if (new RegExp(`\\b(?:section|seksyen|bahagian)\\s*0?${section}\\b`, "i").test(source)) return true;
+  return new RegExp(`(?:^|\\n|\\r)\\s*0?${section}\\s*[.)\\-:\u2013\u2014]\\s*[A-Za-z\u0100-\uffff]`, "m").test(source);
+}
+
+// Section N also carries its modern GHS/CLASS title keyword near the number.
+function hasAlignedTitle(source: string, section: number) {
+  const lower = source.toLowerCase();
+  return SDS_SECTION_KEYWORDS[section].some((keyword) => {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:section\\s*)?0?${section}\\s*(?:[.\\-:\u2013\u2014]|\\s)[^\\n]{0,100}${escaped}`, "im").test(lower);
+  });
 }
 
 type DateField = "revision_date" | "issue_date" | "preparation_date" | "print_date" | "effective_date" | "establishment_date";
@@ -123,7 +157,7 @@ type DateField = "revision_date" | "issue_date" | "preparation_date" | "print_da
 const DATE_LABELS: Record<DateField, string[]> = {
   revision_date: ["Revision date", "Revised date", "Date of revision", "Tarikh semakan", "Tarikh disemak", "Revision"],
   issue_date: ["Issue date", "Issued date", "Date of issue", "Tarikh dikeluarkan", "Tarikh keluaran"],
-  preparation_date: ["Preparation date", "Prepared date", "Date prepared", "SDS Date Of Preparation", "Tarikh penyediaan", "Tarikh disediakan"],
+  preparation_date: ["Date of preparation", "SDS Date Of Preparation", "Date of Preparation/Revision", "Preparation date", "Prepared date", "Date prepared", "Tarikh penyediaan", "Tarikh disediakan"],
   print_date: ["Print date", "Printed date", "Printing date", "Tarikh cetakan", "Tarikh dicetak"],
   effective_date: ["Effective date", "Publication date", "SDS date", "Created date", "Creation date", "Tarikh kuat kuasa", "Tarikh penerbitan"],
   establishment_date: ["Establishment date", "Date of establishment"]
@@ -231,8 +265,8 @@ export function extractWithRegex(text: string) {
   result.is_likely_sds = assessment.isLikelySds;
   result.product_name = firstLabel(text, ["Product name", "Product identifier", "Material name", "Nama produk"]);
   result.trade_name = firstLabel(text, ["Trade name", "Nama dagangan"]);
-  result.supplier = firstLabel(text, ["Supplier", "Supplier name", "Pembekal"]);
-  result.manufacturer = firstLabel(text, ["Manufacturer", "Manufactured by", "Pengilang"]);
+  result.supplier = firstLabel(text, ["Supplier", "Supplier name", "Company name", "Company", "Responsible party", "Distributed by", "Pembekal"]);
+  result.manufacturer = firstLabel(text, ["Manufacturer", "Manufacturer name", "Manufactured by", "Manufacturer / Supplier", "Pengilang"]);
   result.issue_date = dates.issue_date;
   result.revision_date = dates.revision_date;
   result.preparation_date = dates.preparation_date;
@@ -327,7 +361,13 @@ export function mergeExtraction(regexResult: Extraction, geminiResult: Extractio
 }
 
 export function calculateMissingFields(result: Extraction) {
-  return REQUIRED_REVIEW_FIELDS.filter((field) => !hasValue(result[field]));
+  // Supplier and manufacturer are interchangeable for the "responsible party" requirement:
+  // a present manufacturer satisfies supplier, and vice versa.
+  const hasResponsibleParty = hasValue(result.supplier) || hasValue(result.manufacturer);
+  return REQUIRED_REVIEW_FIELDS.filter((field) => {
+    if (field === "supplier" || field === "manufacturer") return !hasResponsibleParty;
+    return !hasValue(result[field]);
+  });
 }
 
 export function buildReviewReason(result: Extraction, ocrRequired: boolean, duplicate: boolean) {

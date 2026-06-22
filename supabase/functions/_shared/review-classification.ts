@@ -30,6 +30,7 @@ type ClassificationOptions = {
   duplicate?: boolean;
   existingApprovedUnchanged?: boolean;
   extractionConflicts?: string[];
+  legacyMsds?: boolean;
   fatalError?: string;
 };
 
@@ -67,7 +68,8 @@ export function classifySdsReview(metadata: Extraction, options: ClassificationO
   if (highCodes.length) reasons.push(`High-consequence hazard code(s): ${highCodes.join(", ")}`);
   if (highTerms.length) reasons.push(`High-risk Section 2 term(s): ${highTerms.join(", ")}`);
   if (riskLevel === "high" && !highCodes.length) reasons.push(`High-risk signal word detected: ${signal}`);
-  if (missingSections.length) reasons.push(`Missing SDS section(s): ${missingSections.join(", ")}`);
+  if (missingSections.length) reasons.push(`Incomplete SDS: numeric section(s) ${missingSections.join(", ")} of 16 not found`);
+  else if (options.legacyMsds) reasons.push("Legacy MSDS / non-standard section order: all 16 numeric sections present but several titles differ from the current GHS/CLASS order — confirm during EHS review");
   if (metadata.missing_fields?.length) reasons.push(`Missing review field(s): ${metadata.missing_fields.join(", ")}`);
   reasons.push(...(metadata.date_detection_warnings || []));
   reasons.push(...conflicts);
@@ -111,14 +113,37 @@ export function classifySdsReview(metadata: Extraction, options: ClassificationO
 
 export function findExtractionConflicts(regex: Extraction, ai: Extraction | null) {
   if (!ai) return [];
-  const fields: (keyof Extraction)[] = [
-    "product_name", "trade_name", "manufacturer", "supplier", "revision_date", "issue_date", "signal_word"
-  ];
-  return fields.flatMap((field) => {
-    const left = normalized(regex[field]);
-    const right = normalized(ai[field]);
-    return left && right && left !== right ? [`Rule and AI extraction disagree on ${String(field).replaceAll("_", " ")}`] : [];
-  });
+  const conflicts: string[] = [];
+  // Product name conflicts only when NO rule name aligns with ANY AI name — ignoring SDS/MSDS
+  // prefixes, file extensions, verbosity (containment), and shared product codes.
+  const ruleNames = [regex.product_name, regex.trade_name];
+  const aiNames = [ai.product_name, ai.trade_name];
+  if (!ruleNames.some((rule) => aiNames.some((value) => productNamesAlign(rule, value)))) {
+    conflicts.push("Rule and AI extraction disagree on product name");
+  }
+  for (const field of ["revision_date", "issue_date"] as (keyof Extraction)[]) {
+    const left = normalized(regex[field]); const right = normalized(ai[field]);
+    if (left && right && left !== right) conflicts.push(`Rule and AI extraction disagree on ${String(field).replaceAll("_", " ")}`);
+  }
+  const ruleSignal = normalized(regex.signal_word); const aiSignal = normalized(ai.signal_word);
+  if (ruleSignal && aiSignal && ruleSignal !== aiSignal) conflicts.push("Rule and AI extraction disagree on signal word");
+  return conflicts;
+}
+
+function productNamesAlign(a: unknown, b: unknown) {
+  const na = normProductName(a); const nb = normProductName(b);
+  if (!na || !nb) return true; // one side missing is not a conflict
+  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+  const tokensA = na.split(" ").filter((token) => token.length >= 3);
+  const tokensB = new Set(nb.split(" ").filter((token) => token.length >= 3));
+  return tokensA.some((token) => tokensB.has(token)); // share a meaningful token / product code
+}
+
+function normProductName(value: unknown) {
+  return String(value ?? "").toLowerCase()
+    .replace(/\b(?:m?sds|safety data sheet|material safety data sheet)\b/g, " ")
+    .replace(/\.(?:pdf|docx?)$/i, "")
+    .replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function result(decision: ReviewDecision, riskLevel: RiskLevel, reasons: string[], evidence: Record<string, string>, aiShouldVerify: boolean): ReviewClassification {

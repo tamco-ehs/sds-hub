@@ -284,13 +284,16 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
     ocrRequired: assessment.weakText || Boolean(textError),
     duplicate: Boolean(duplicateOfId),
     existingApprovedUnchanged,
-    extractionConflicts
+    extractionConflicts,
+    legacyMsds: sections.legacyMsds
   });
-  const classificationReason = classification.reasons.join(". ");
-  if (classificationReason) merged.review_required_reason = `${merged.review_required_reason}. ${classificationReason}`;
-  if (geminiError) merged.review_required_reason = `${merged.review_required_reason}. ${friendlyExtractionNote(geminiError)}`;
-  if (textError) merged.review_required_reason = `${merged.review_required_reason}. PDF text extraction failed: ${textError}`;
-  if (sections.missing.length) merged.review_required_reason = `${merged.review_required_reason}. Incomplete SDS: missing section(s) ${sections.missing.join(", ")} of 16 (DOSH CLASS 2013)`;
+  // Single deduplicated reason built from the classifier (which already handles numeric-section
+  // completeness, legacy MSDS, missing fields, conflicts and date warnings) plus extraction errors.
+  const reasonParts = [...classification.reasons];
+  if (geminiError) reasonParts.push(friendlyExtractionNote(geminiError));
+  if (textError) reasonParts.push(`PDF text extraction failed: ${textError}`);
+  reasonParts.push("EHS approval is required before publication");
+  merged.review_required_reason = [...new Set(reasonParts.filter(Boolean))].join(". ");
   const method = gemini ? (assessment.weakText ? "pdf-text+gemini-ocr" : "pdf-text+regex+gemini") : "pdf-text+regex";
   const aiVerificationStatus = geminiVerificationStatus(geminiNeeded, geminiKey, gemini, geminiError, allowGemini);
 
