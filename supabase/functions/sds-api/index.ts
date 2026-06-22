@@ -10,7 +10,7 @@ import { BlobReader, Uint8ArrayWriter, ZipReader } from "npm:@zip.js/zip.js@2.7.
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 const MAX_ZIP_ADVERTISED_BYTES = 100 * 1024 * 1024;
 const MAX_ZIP_EDGE_BYTES = 20 * 1024 * 1024;
-const MAX_ZIP_PDFS = 100;
+const MAX_ZIP_PDFS = 20;
 const MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
 const MAX_TEXT_AUDIT_LENGTH = 50000;
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -197,7 +197,8 @@ async function uploadZip(file: File, cors: Record<string, string> | null, actor:
       }
       try {
         const bytes = await entry.getData(new Uint8ArrayWriter());
-        const document = await ingestPdf(filename.split(/[\\/]/).pop() || filename, bytes, actor, batchId, true);
+        // ZIP runs regex-only (no per-file Gemini) so the whole batch fits in one request without a gateway timeout. For AI-quality extraction, use multi-file select (one request per PDF) or re-extract.
+        const document = await ingestPdf(filename.split(/[\\/]/).pop() || filename, bytes, actor, batchId, false);
         accepted += 1;
         if (document?.possible_duplicate_flag) duplicates += 1;
         results.push({
