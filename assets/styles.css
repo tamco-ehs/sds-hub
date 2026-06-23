@@ -4,10 +4,10 @@
   --navy-900: #0d2c49;
   --navy-800: #14406a;
   --navy-700: #1c5894;
-  --blue-600: #1577be;
-  --blue-700: #0f5f9c;
-  --blue-100: #d7ecf9;
-  --blue-050: #eef6fc;
+  --blue-600: #0d4f8b;
+  --blue-700: #093d6e;
+  --blue-100: #dbe8f4;
+  --blue-050: #eef4fa;
   --amber-500: #f6b73c;
   --amber-100: #fff0c7;
   --red-700: #a52a2a;
@@ -29,7 +29,7 @@
   --radius-md: 14px;
   --radius-lg: 20px;
   --content-width: 1180px;
-  --focus-ring: 0 0 0 3px rgba(21, 119, 190, 0.3);
+  --focus-ring: 0 0 0 3px rgba(13, 79, 139, 0.32);
 }
 
 *,
@@ -131,17 +131,17 @@ a {
 }
 
 .brand-mark {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
+  height: 34px;
+  width: auto;
   flex: 0 0 auto;
-  color: var(--amber-500);
+  display: block;
 }
 
-.brand-mark svg {
-  width: 100%;
-  height: 100%;
+.brand-divider {
+  width: 1px;
+  height: 26px;
+  background: rgba(255, 255, 255, 0.28);
+  flex: 0 0 auto;
 }
 
 .brand strong,
