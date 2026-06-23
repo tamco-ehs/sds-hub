@@ -683,12 +683,24 @@ async function restoreDocument(id: string, request: Request, cors: Record<string
 }
 
 async function dashboard(cors: Record<string, string> | null) {
-  const rows = await selectRows("sds_documents", "select=id,original_filename,product_name,trade_name,status,extraction_confidence,updated_at&deleted_at=is.null&order=updated_at.desc&limit=1000");
+  const rows = await selectRows("sds_documents", "select=id,original_filename,product_name,trade_name,status,extraction_confidence,expiry_date,updated_at&deleted_at=is.null&order=updated_at.desc&limit=1000");
   const counts = Object.fromEntries(SDS_STATUSES.map((status) => [status, rows.filter((row: Record<string, unknown>) => row.status === status).length]));
   const overdue = Date.now() - 7 * 86400000;
+  // Expiry reminders over the live register (excludes archived/rejected; unknown-date SDS are skipped, never counted as expired).
+  const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  let expiringSoon = 0, expired = 0;
+  for (const row of rows) {
+    if (!["Approved", "Needs Review", "Extracted"].includes(String(row.status))) continue;
+    const value = String(row.expiry_date || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) continue;
+    const days = Math.ceil((Date.parse(`${value}T00:00:00Z`) - todayMs) / 86400000);
+    if (days < 0) expired += 1; else if (days <= 30) expiringSoon += 1;
+  }
   return json({
     counts,
     overdue_review_count: rows.filter((row: Record<string, unknown>) => row.status === "Needs Review" && new Date(String(row.updated_at)).getTime() < overdue).length,
+    expiring_soon_count: expiringSoon,
+    expired_count: expired,
     recent: rows.slice(0, 10)
   }, 200, cors);
 }

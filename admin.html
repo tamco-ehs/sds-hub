@@ -60,6 +60,7 @@
         <section class="admin-view is-active" data-view-panel="dashboard">
           <div class="view-heading"><div><p class="eyebrow">Control centre</p><h1>SDS Review Dashboard</h1></div><button class="secondary-action" data-refresh="dashboard" type="button">Refresh</button></div>
           <div id="dashboardCards" class="metric-grid"></div>
+          <div id="expiryReminders" class="expiry-reminders" hidden></div>
           <div class="panel"><h2>Recent activity</h2><div id="recentTable"></div></div>
         </section>
 
@@ -112,7 +113,7 @@
         <section class="admin-view" data-view-panel="master" hidden>
           <div class="view-heading"><div><p class="eyebrow">Controlled records</p><h1>SDS Master Register</h1></div><button class="secondary-action" data-refresh="master" type="button">Refresh</button></div>
           <div class="panel">
-            <div class="table-toolbar"><input id="masterSearch" type="search" placeholder="Search product or original filename"><select id="masterStatus"><option value="">All statuses</option></select><select id="masterScope" data-admin-only><option value="active">Active records</option><option value="archived">Archived records</option><option value="deleted">Deleted records</option><option value="all">All records</option></select><button id="masterSearchButton" class="secondary-action" type="button">Search</button></div>
+            <div class="table-toolbar"><input id="masterSearch" type="search" placeholder="Search product or original filename"><select id="masterStatus"><option value="">All statuses</option></select><select id="masterValidity" aria-label="Filter by validity"><option value="all">All validity</option><option value="valid">Valid</option><option value="expiring">Expiring soon</option><option value="expired">Expired</option><option value="unknown">Unknown validity</option><option value="missing-revision">Missing revision date</option><option value="missing-approved">Missing approved SDS</option><option value="pending-review">Pending EHS review</option></select><select id="masterScope" data-admin-only><option value="active">Active records</option><option value="archived">Archived records</option><option value="deleted">Deleted records</option><option value="all">All records</option></select><button id="masterSearchButton" class="secondary-action" type="button">Search</button></div>
             <div id="bulkToolbar" class="bulk-toolbar" data-admin-only>
               <button id="selectAllButton" class="secondary-action" type="button">Select all visible</button>
               <button id="clearSelectionButton" class="secondary-action" type="button">Clear selection</button>

@@ -74,10 +74,10 @@ const state = {
 const elementIds = [
   "connectionBadge","connectionPanel","workspace","adminSidebar","loginForm","emailInput","passwordInput","loginButton","loginError","loginNotice","forgotPasswordButton","logoutButton",
   "changePasswordButton","passwordDialog","passwordForm","passwordDialogTitle","newPasswordInput","confirmPasswordInput","passwordError","passwordCancelButton","passwordSaveButton",
-  "dashboardCards","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","uploadStepper","queueTable","reviewList",
+  "dashboardCards","expiryReminders","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","uploadStepper","queueTable","reviewList",
   "reviewForm","reviewStatus","reviewTitle","reviewOriginal","reviewWarnings","reviewFields","reviewComment",
   "openOriginalButton","saveReviewButton","reextractButton","duplicateButton","archiveButton","rejectButton","approveButton",
-  "masterSearch","masterStatus","masterScope","masterSearchButton","masterTable","bulkToolbar","selectAllButton","clearSelectionButton",
+  "masterSearch","masterStatus","masterValidity","masterScope","masterSearchButton","masterTable","bulkToolbar","selectAllButton","clearSelectionButton",
   "selectedCount","bulkArchiveButton","bulkDeleteButton","bulkPurgeButton","bulkRestoreButton","bulkResult","bulkDialog","bulkForm","bulkDialogTitle",
   "bulkDialogMessage","bulkReason","bulkConfirmation","bulkCancelButton","bulkConfirmButton","duplicateTable","detailContent","detailNav","adminToast",
   "duplicateDialog","duplicateMessage","duplicateExisting","duplicateCancelButton","duplicateMarkButton","duplicateRevisionButton"
@@ -124,6 +124,7 @@ function bindEvents() {
   elements.duplicateRevisionButton.addEventListener("click", handleAsync(confirmUploadAsNewRevision));
   elements.masterSearchButton.addEventListener("click", handleAsync(loadMaster));
   elements.masterScope.addEventListener("change", handleAsync(loadMaster));
+  elements.masterValidity.addEventListener("change", handleAsync(loadMaster));
   elements.openOriginalButton.addEventListener("click", () => openFile("original"));
   elements.saveReviewButton.addEventListener("click", handleAsync(saveReview));
   elements.reextractButton.addEventListener("click", handleAsync(reextract));
@@ -289,7 +290,25 @@ async function loadDashboard() {
   elements.dashboardCards.replaceChildren(...important.map((status) => node("article", { className:"metric-card" }, [
     node("strong", { textContent:String(data.counts[status] || 0) }), node("span", { textContent:status })
   ])));
+  renderExpiryReminders(data.expiring_soon_count || 0, data.expired_count || 0);
   renderDocumentTable(elements.recentTable, data.recent || [], { compact:true });
+}
+
+// Dashboard expiry reminder: clickable alerts that jump to the master list filtered to the matching set.
+function renderExpiryReminders(expiringSoon, expired) {
+  if (!elements.expiryReminders) return;
+  const alerts = [];
+  if (expired > 0) alerts.push(["expired", `${expired} expired SDS`, "Expired SDS need replacement or retirement."]);
+  if (expiringSoon > 0) alerts.push(["expiring", `${expiringSoon} SDS expiring within 30 days`, "Review and replace before the validity date."]);
+  if (!alerts.length) { elements.expiryReminders.hidden = true; elements.expiryReminders.replaceChildren(); return; }
+  elements.expiryReminders.hidden = false;
+  elements.expiryReminders.replaceChildren(...alerts.map(([state, title, note]) => {
+    const card = node("button", { type:"button", className:`expiry-alert expiry-alert-${state}` }, [
+      node("strong", { textContent:title }), node("span", { textContent:note })
+    ]);
+    card.addEventListener("click", () => { showView("master").then(() => { if (elements.masterValidity) { elements.masterValidity.value = state; void loadMaster(); } }); });
+    return card;
+  }));
 }
 
 async function loadQueue() {
@@ -625,17 +644,56 @@ async function loadMaster() {
   if (elements.masterStatus.value) params.set("status", elements.masterStatus.value);
   if (elements.masterSearch.value.trim()) params.set("q", elements.masterSearch.value.trim());
   const data = await api(`/v1/admin/documents?${params}`);
-  state.visibleDocuments = data.documents || []; clearSelection();
-  renderDocumentTable(elements.masterTable, state.visibleDocuments, { selectable:isAdmin() });
+  const validityFilter = elements.masterValidity?.value || "all";
+  state.visibleDocuments = (data.documents || []).filter((record) => matchesValidityFilter(record, validityFilter));
+  clearSelection();
+  renderDocumentTable(elements.masterTable, state.visibleDocuments, { selectable:isAdmin(), validity:true });
 }
 
 async function loadDuplicates() { const data = await api("/v1/admin/duplicates"); renderDocumentTable(elements.duplicateTable, data.documents || []); }
 
-function renderDocumentTable(container, documents, { compact = false, selectable = false } = {}) {
+// Validity status from the backend-computed expiry_date (30-day "expiring soon" window per EHS spec).
+// Never invents a date: no usable expiry => "unknown", never "expired".
+function validityState(record) {
+  const value = String(record.expiry_date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return { state:"unknown", label:"Unknown validity", expiry:"", days:null };
+  const todayMs = Date.parse(`${new Date().toISOString().slice(0,10)}T00:00:00Z`);
+  const days = Math.ceil((Date.parse(`${value}T00:00:00Z`) - todayMs) / 86400000);
+  if (days < 0) return { state:"expired", label:"Expired", expiry:value, days };
+  if (days <= 30) return { state:"expiring", label:"Expiring soon", expiry:value, days };
+  return { state:"valid", label:"Valid", expiry:value, days };
+}
+
+function matchesValidityFilter(record, filter) {
+  if (!filter || filter === "all") return true;
+  if (filter === "missing-revision") return !record.revision_date;
+  if (filter === "missing-approved") return record.status !== "Approved" || !record.approved_filename;
+  if (filter === "pending-review") return record.status === "Needs Review";
+  return validityState(record).state === filter; // valid | expiring | expired | unknown
+}
+
+function validityCell(record) {
+  const view = validityState(record);
+  const cell = node("td");
+  const label = view.days === null ? view.label
+    : view.state === "expired" ? `Expired ${Math.abs(view.days)}d ago`
+    : `${view.label} · ${view.days}d`;
+  cell.append(node("span", { className:`status-badge validity-${view.state}`, textContent:label }));
+  if (view.expiry) {
+    const basis = record.validity_date_basis ? ` · ${String(record.validity_date_basis).replace("_date","")}` : "";
+    cell.append(node("span", { className:"validity-sub", textContent:`Valid until ${view.expiry}${basis}` }));
+  }
+  return cell;
+}
+
+function renderDocumentTable(container, documents, { compact = false, selectable = false, validity = false } = {}) {
   if (!documents.length) return container.replaceChildren(emptyState("No matching SDS records."));
   const table = node("table", { className:"data-table" }); const head = node("thead"); const headerRow = node("tr");
   if (selectable) headerRow.append(node("th", { textContent:"Select" }));
-  for (const title of compact ? ["Document","Status","Updated","Action"] : ["Document","Original filename","Status","Confidence","Updated","Action"]) headerRow.append(node("th", { textContent:title }));
+  const headers = compact
+    ? ["Document","Status","Updated","Action"]
+    : ["Document","Original filename","Status", ...(validity ? ["Validity"] : []), "Confidence","Updated","Action"];
+  for (const title of headers) headerRow.append(node("th", { textContent:title }));
   head.append(headerRow); const body = node("tbody");
   for (const record of documents) {
     const row = node("tr");
@@ -649,6 +707,7 @@ function renderDocumentTable(container, documents, { compact = false, selectable
     if (!compact) row.append(node("td", { textContent:record.original_filename || "-" }));
     const statusCell = node("td"); const badge = node("span", { className:"status-badge", textContent:record.deleted_at ? "Deleted" : record.status });
     badge.dataset.status = record.deleted_at ? "Deleted" : record.status; statusCell.append(badge); row.append(statusCell);
+    if (validity && !compact) row.append(validityCell(record));
     if (!compact) row.append(node("td", { textContent:`${record.extraction_confidence || 0}%` }));
     row.append(node("td", { textContent:formatDateTime(record.updated_at) }));
     const actionCell = node("td"); const button = node("button", { type:"button", textContent:record.status === "Needs Review" && !record.deleted_at ? "Review" : "View" });

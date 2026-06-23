@@ -27,6 +27,17 @@
 .review-issue-category{display:block;margin-bottom:2px;color:#6b4700;font-size:.6rem;font-weight:850;letter-spacing:.05em;text-transform:uppercase}
 .review-issue-list{margin:0;padding-left:18px;font-size:.74rem;line-height:1.45}
 .review-issue-list li{margin:1px 0}
+.validity-sub{display:block;margin-top:3px;color:var(--muted);font-size:.6rem}
+.status-badge.validity-valid{color:var(--green);background:var(--green-pale)}
+.status-badge.validity-expiring{color:#704c00;background:var(--amber-pale)}
+.status-badge.validity-expired{color:var(--red);background:var(--red-pale)}
+.status-badge.validity-unknown{color:var(--navy-800);background:#eaf0f5}
+.expiry-reminders{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+.expiry-alert{flex:1 1 280px;display:flex;flex-direction:column;gap:3px;padding:14px 16px;border-radius:12px;text-align:left;cursor:pointer;border:1px solid}
+.expiry-alert strong{font-size:1rem}
+.expiry-alert span{font-size:.72rem}
+.expiry-alert-expired{color:var(--red);background:var(--red-pale);border-color:#dba6a2}
+.expiry-alert-expiring{color:#704c00;background:var(--amber-pale);border-color:#ecd087}
 .upload-row td:nth-child(2){font-weight:800;text-transform:capitalize}
 .upload-row-processed td:nth-child(2){color:var(--green)}
 .upload-row-duplicate td:nth-child(2){color:#704c00}
