@@ -483,10 +483,11 @@ function showDocument(documentRecord, { updateHistory = true, scroll = true } = 
   elements.hazardTags.replaceChildren(tagFragment);
   elements.hazardTags.hidden = documentRecord.hazards.length === 0;
 
-  const pdfUrl = getDocumentPdfUrl(documentRecord);       // direct GitHub link — for "Open official SDS PDF"
-  const previewUrl = getPreviewPdfUrl(documentRecord);    // same-origin CORS proxy — for in-page byte fetch
-  elements.pdfLink.href = pdfUrl;
-  elements.pdfLink.dataset.pdfUrl = pdfUrl;
+  const pdfUrl = getDocumentPdfUrl(documentRecord);       // direct GitHub link (downloads on some hosts)
+  const previewUrl = getPreviewPdfUrl(documentRecord);    // same-origin proxy — served inline, for preview + "Open PDF"
+  // "Open official SDS PDF" points at the inline proxy so it opens in a new tab instead of downloading.
+  elements.pdfLink.href = previewUrl;
+  elements.pdfLink.dataset.pdfUrl = previewUrl;
   elements.previewButton.dataset.pdfUrl = previewUrl;
   elements.previewButton.setAttribute("aria-expanded", "false");
   elements.previewButton.querySelector("span").textContent = "Preview PDF on this page";

@@ -653,7 +653,13 @@ function renderDocumentTable(container, documents, { compact = false, selectable
     row.append(node("td", { textContent:formatDateTime(record.updated_at) }));
     const actionCell = node("td"); const button = node("button", { type:"button", textContent:record.status === "Needs Review" && !record.deleted_at ? "Review" : "View" });
     button.addEventListener("click", () => record.status === "Needs Review" && !record.deleted_at ? (showView("review"), openReview(record.id)) : openDetail(record.id));
-    actionCell.append(button); row.append(actionCell); body.append(row);
+    actionCell.append(button);
+    if (!record.deleted_at) {
+      const openBtn = node("button", { type:"button", textContent:"Open PDF" });
+      openBtn.addEventListener("click", () => openFile("original", record.id));
+      actionCell.append(openBtn);
+    }
+    row.append(actionCell); body.append(row);
   }
   table.append(head, body); container.replaceChildren(table);
 }
@@ -707,6 +713,9 @@ async function loadDetail(documentId) {
   for (const field of fields) list.append(node("dt", { textContent:field.replaceAll("_"," ") }), node("dd", { textContent:String(record[field] ?? "-") }));
   const missing = Array.isArray(record.missing_sections) ? record.missing_sections : [];
   list.append(node("dt", { textContent:"missing sections" }), node("dd", { textContent:missing.length ? missing.join(", ") : "None — all 16 present" })); summary.append(list);
+  const openPdf = node("button", { className:"secondary-action", type:"button", textContent:"Open original PDF" });
+  openPdf.addEventListener("click", () => openFile("original", record.id));
+  summary.append(openPdf);
   if (isAdmin() && (record.deleted_at || record.archived_at)) {
     const restore = node("button", { className:"secondary-action", type:"button", textContent:"Restore record" });
     restore.addEventListener("click", () => { state.selectedIds = new Set([record.id]); openBulkDialog("restore"); }); summary.append(restore);
@@ -828,13 +837,15 @@ function renderUploadResults(rows) {
   table.append(head, body); elements.uploadResult.append(table);
 }
 
-async function openFile(variant) {
-  if (!state.selectedId) return;
+async function openFile(variant, documentId) {
+  const id = documentId || state.selectedId;
+  if (!id) return;
   // Open the tab synchronously inside the click gesture; populating it after the fetch avoids the popup blocker.
-  const viewer = window.open("", "_blank");
+  // The blob URL renders inline in the browser's PDF viewer (no forced download).
+  const viewer = window.open("", "_blank", "noopener");
   try {
     const token = await accessToken();
-    const response = await fetch(`${state.apiUrl}/v1/admin/documents/${state.selectedId}/file?variant=${encodeURIComponent(variant)}`, { headers:{ Authorization:`Bearer ${token}` } });
+    const response = await fetch(`${state.apiUrl}/v1/admin/documents/${id}/file?variant=${encodeURIComponent(variant)}`, { headers:{ Authorization:`Bearer ${token}` } });
     if (!response.ok) throw new Error("PDF could not be opened.");
     const url = URL.createObjectURL(await response.blob());
     if (viewer) viewer.location = url; else window.open(url, "_blank", "noopener");
