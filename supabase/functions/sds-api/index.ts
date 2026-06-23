@@ -75,11 +75,15 @@ async function route(request: Request) {
   if (path === "/v1/admin/documents" && request.method === "GET") return listDocuments(url, cors, actor);
   if (path === "/v1/admin/dashboard" && request.method === "GET") return dashboard(cors);
   if (path === "/v1/admin/duplicates" && request.method === "GET") return duplicateList(cors);
+  if (path === "/v1/admin/departments" && request.method === "GET") return listDepartments(cors);
+  if (path === "/v1/admin/departments" && request.method === "POST") return createDepartment(request, cors, requireRole(actor, "EHS_ADMIN"));
+  const deptMatch = path.match(/^\/v1\/admin\/departments\/([a-f0-9-]+)$/i);
+  if (deptMatch && UUID_PATTERN.test(deptMatch[1]) && request.method === "PATCH") return updateDepartment(deptMatch[1], request, cors, requireRole(actor, "EHS_ADMIN"));
 
   const bulkMatch = path.match(/^\/v1\/admin\/documents\/bulk\/(archive|delete|restore|purge)$/i);
   if (bulkMatch && request.method === "POST") return bulkAction(bulkMatch[1].toLowerCase(), request, cors, requireRole(actor, "EHS_ADMIN"));
 
-  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|group|ungroup|archive|restore|file))?$/i);
+  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|group|ungroup|departments|archive|restore|file))?$/i);
   if (!match || !UUID_PATTERN.test(match[1])) return json({ error: "Admin endpoint not found." }, 404, cors);
   const [, id, action = ""] = match;
   if (!action && request.method === "GET") return getDocument(id, cors, actor);
@@ -92,6 +96,7 @@ async function route(request: Request) {
   if (action === "duplicate" && request.method === "POST") return markDuplicate(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "group" && request.method === "POST") return groupDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "ungroup" && request.method === "POST") return ungroupDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "departments" && request.method === "PUT") return setDocumentDepartments(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "file" && request.method === "GET") return streamFile(id, url.searchParams.get("variant") || "original", true, cors, actor);
   return json({ error: "Method not allowed." }, 405, cors);
 }
@@ -392,13 +397,14 @@ async function getDocument(id: string, cors: Record<string, string> | null, acto
   const document = await fetchDocument(id);
   if (!document) return json({ error: "Document not found." }, 404, cors);
   if ((document.deleted_at || document.archived_at) && actor.role !== "EHS_ADMIN") return json({ error: "Role does not allow access to archived or deleted SDS records." }, 403, cors);
-  const [logs, reviewHistory, auditEvents, group] = await Promise.all([
+  const [logs, reviewHistory, auditEvents, group, departments] = await Promise.all([
     selectRows("sds_extraction_logs", `select=*&document_id=eq.${id}&order=created_at.desc&limit=50`),
     selectRows("sds_review_history", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
     selectRows("sds_audit_events", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
-    buildVariantInfo(document)
+    buildVariantInfo(document),
+    documentDepartments(id)
   ]);
-  return json({ document, group, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
+  return json({ document, group, departments, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
 }
 
 // Assemble the language-variant context an EHS reviewer needs: the suggested sibling (if any),
@@ -712,10 +718,97 @@ async function duplicateList(cors: Record<string, string> | null) {
   return json({ documents: rows.filter((row: Record<string, unknown>) => row.possible_duplicate_flag || (hashes.get(String(row.file_sha256)) || 0) > 1) }, 200, cors);
 }
 
+// ---- Department master + per-document linking ----
+
+async function listDepartments(cors: Record<string, string> | null) {
+  const [departments, links] = await Promise.all([
+    selectRows("departments", "select=*&order=name.asc"),
+    selectRows("sds_document_departments", "select=department_id")
+  ]);
+  const usage = new Map<string, number>();
+  for (const link of links) usage.set(String(link.department_id), (usage.get(String(link.department_id)) || 0) + 1);
+  return json({ departments: departments.map((dept: Record<string, unknown>) => ({ ...dept, sds_count: usage.get(String(dept.id)) || 0 })) }, 200, cors);
+}
+
+async function createDepartment(request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  const name = String(body.name || "").trim();
+  if (name.length < 2 || name.length > 80) return json({ error: "Department name must be 2-80 characters." }, 400, cors);
+  const existing = await selectRows("departments", `select=id&name=ilike.${encodeURIComponent(name)}&limit=1`);
+  if (existing.length) return json({ error: "A department with that name already exists." }, 409, cors);
+  const inserted = await insertRows("departments", { name, code: String(body.code || "").trim() || null, is_active: body.is_active !== false });
+  const department = Array.isArray(inserted) ? inserted[0] : inserted;
+  await auditEvent(actor, "DEPARTMENT_CREATE", null, name, null, department);
+  return json({ department }, 201, cors);
+}
+
+async function updateDepartment(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  const existing = (await selectRows("departments", `select=*&id=eq.${id}&limit=1`))[0];
+  if (!existing) return json({ error: "Department not found." }, 404, cors);
+  const changes: Record<string, unknown> = { updated_at: nowIso() };
+  if (typeof body.name === "string" && body.name.trim()) {
+    const name = body.name.trim();
+    if (name.length < 2 || name.length > 80) return json({ error: "Department name must be 2-80 characters." }, 400, cors);
+    const clash = await selectRows("departments", `select=id&name=ilike.${encodeURIComponent(name)}&id=neq.${id}&limit=1`);
+    if (clash.length) return json({ error: "Another department already uses that name." }, 409, cors);
+    changes.name = name;
+  }
+  if (typeof body.code === "string") changes.code = body.code.trim() || null;
+  if (typeof body.is_active === "boolean") changes.is_active = body.is_active;
+  await updateRows("departments", `id=eq.${id}`, changes, false);
+  const updated = (await selectRows("departments", `select=*&id=eq.${id}&limit=1`))[0];
+  await auditEvent(actor, "DEPARTMENT_UPDATE", null, updated?.name || existing.name, existing, updated);
+  return json({ department: updated }, 200, cors);
+}
+
+// Replace the set of departments linked to a document (many-to-many). Department ids are validated.
+async function setDocumentDepartments(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  const document = await fetchDocument(id);
+  if (!document) return json({ error: "Document not found." }, 404, cors);
+  const requested = Array.isArray(body.department_ids) ? [...new Set(body.department_ids.map((value: unknown) => String(value)))] : [];
+  for (const deptId of requested) if (!UUID_PATTERN.test(deptId)) return json({ error: "Invalid department id." }, 400, cors);
+  const valid = requested.length ? await selectRows("departments", `select=id&id=in.(${requested.join(",")})`) : [];
+  const validIds = new Set(valid.map((row: Record<string, unknown>) => String(row.id)));
+  const existing = await selectRows("sds_document_departments", `select=department_id&document_id=eq.${id}`);
+  const existingIds = new Set(existing.map((row: Record<string, unknown>) => String(row.department_id)));
+  const toAdd = [...validIds].filter((deptId) => !existingIds.has(deptId));
+  const toRemove = [...existingIds].filter((deptId) => !validIds.has(deptId));
+  if (toRemove.length) await deleteRows("sds_document_departments", `document_id=eq.${id}&department_id=in.(${toRemove.join(",")})`);
+  if (toAdd.length) await insertRows("sds_document_departments", toAdd.map((deptId) => ({ document_id: id, department_id: deptId, created_by: actor.displayName })), false);
+  await history(id, "SET_DEPARTMENTS", document.status, document.status, actor, { department_ids: [...validIds] }, body.comment);
+  await auditEvent(actor, "SET_DEPARTMENTS", document, body.comment, [...existingIds], [...validIds]);
+  return json({ departments: await documentDepartments(id) }, 200, cors);
+}
+
+// Departments linked to one document: [{ id, name, is_active }].
+async function documentDepartments(documentId: string) {
+  const links = await selectRows("sds_document_departments", `select=department_id&document_id=eq.${documentId}`);
+  if (!links.length) return [];
+  const ids = links.map((link: Record<string, unknown>) => String(link.department_id));
+  const departments = await selectRows("departments", `select=id,name,is_active&id=in.(${ids.join(",")})&order=name.asc`);
+  return departments;
+}
+
 async function publicCatalog(cors: Record<string, string> | null) {
   // Only Approved rows are published, so per-language approval is already enforced: a pending or
   // rejected language variant simply is not returned and stays hidden from employees.
   const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,document_language,is_bilingual,sds_record_id,revision_date,established_date,expiry_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&deleted_at=is.null&archived_at=is.null&order=product_name.asc.nullslast,trade_name.asc");
+  // Map each approved document to the department names that use it (one query, joined in code).
+  const [links, departments] = await Promise.all([
+    selectRows("sds_document_departments", "select=document_id,department_id"),
+    selectRows("departments", "select=id,name")
+  ]);
+  const deptName = new Map<string, string>(departments.map((dept: Record<string, unknown>) => [String(dept.id), String(dept.name)] as [string, string]));
+  const docDepartments = new Map<string, string[]>();
+  for (const link of links) {
+    const name = deptName.get(String(link.department_id));
+    if (!name) continue;
+    const list = docDepartments.get(String(link.document_id)) || [];
+    list.push(name);
+    docDepartments.set(String(link.document_id), list);
+  }
   return json({
     schemaVersion: 1,
     updatedAt: new Date().toISOString().slice(0, 10),
@@ -724,7 +817,8 @@ async function publicCatalog(cors: Record<string, string> | null) {
       name: row.product_name || row.trade_name,
       file: row.approved_filename,
       pdfUrl: row.approved_download_url,
-      department: "Unassigned",
+      department: (docDepartments.get(String(row.id)) || [])[0] || "Unassigned",
+      departments: docDepartments.get(String(row.id)) || [],
       revisionDate: /^\d{4}-\d{2}-\d{2}$/.test(String(row.revision_date || "")) ? row.revision_date : "",
       establishedDate: /^\d{4}-\d{2}-\d{2}$/.test(String(row.established_date || "")) ? row.established_date : "",
       expiryDate: /^\d{4}-\d{2}-\d{2}$/.test(String(row.expiry_date || "")) ? row.expiry_date : "",

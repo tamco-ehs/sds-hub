@@ -62,6 +62,7 @@ export function sanitizeCatalog(documents) {
       documentLanguage: ["en", "ms", "bilingual", "unknown"].includes(document.documentLanguage) ? document.documentLanguage : "unknown",
       isBilingual: Boolean(document.isBilingual),
       groupId: typeof document.groupId === "string" && document.groupId.trim() ? document.groupId.trim() : "",
+      departments: Object.freeze(Array.isArray(document.departments) ? [...new Set(document.departments.map((value) => String(value).trim()).filter(Boolean))] : []),
       pdfUrl: document.pdfUrl?.trim() || "",
       establishedDate: document.establishedDate?.trim() || "",
       expiryDate: document.expiryDate?.trim() || "",
@@ -110,8 +111,8 @@ export function pickVariant(variants, language) {
 export const EMPLOYEE_LANGUAGES = [{ code: "en", label: "English" }, { code: "ms", label: "Bahasa Melayu" }];
 
 export function getDepartments(documents) {
-  return [...new Set(documents.map((document) => document.department).filter(Boolean))]
-    .sort(collator.compare);
+  const names = documents.flatMap((document) => (document.departments && document.departments.length ? document.departments : [document.department]));
+  return [...new Set(names.filter(Boolean))].sort(collator.compare);
 }
 
 export function getLanguages(documents) {
@@ -141,7 +142,7 @@ export function filterCatalog(documents, query = "", department = "All", languag
   const terms = normalizedQuery.split(" ").filter(Boolean);
 
   return documents.filter((document) => {
-    if (department !== "All" && document.department !== department) return false;
+    if (department !== "All" && document.department !== department && !(document.departments || []).includes(department)) return false;
     if (language !== "All" && document.language !== language) return false;
     if (terms.length === 0) return true;
 

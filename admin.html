@@ -35,6 +35,7 @@
         <button class="nav-button" data-view="review" type="button">Review &amp; Approval</button>
         <button class="nav-button" data-view="master" type="button">Master Register</button>
         <button class="nav-button" data-view="duplicates" type="button">Duplicate Checker</button>
+        <button class="nav-button" data-view="settings" data-admin-only type="button">Settings</button>
         <button id="detailNav" class="nav-button" data-view="detail" type="button" disabled>SDS Detail</button>
       </nav>
       <a class="back-link" href="./">Return to public SDS Hub</a>
@@ -131,6 +132,19 @@
         <section class="admin-view" data-view-panel="duplicates" hidden>
           <div class="view-heading"><div><p class="eyebrow">Document control</p><h1>SDS Duplicate Checker</h1></div><button class="secondary-action" data-refresh="duplicates" type="button">Refresh</button></div>
           <div class="panel"><p class="panel-intro">Exact SHA-256 matches and metadata-level duplicate candidates appear here. EHS must choose the controlling record.</p><div id="duplicateTable"></div></div>
+        </section>
+
+        <section class="admin-view" data-view-panel="settings" hidden>
+          <div class="view-heading"><div><p class="eyebrow">Admin settings</p><h1>Department Master</h1></div><button class="secondary-action" data-refresh="settings" type="button">Refresh</button></div>
+          <div class="panel">
+            <p class="panel-intro">Manage the departments that use SDS. Inactive departments are hidden when linking new SDS but stay visible on records already linked to them. Departments are never hard-deleted while linked.</p>
+            <form id="departmentForm" class="table-toolbar">
+              <input id="departmentName" type="text" placeholder="New department name" maxlength="80" required>
+              <input id="departmentCode" type="text" placeholder="Code (optional)" maxlength="40">
+              <button id="departmentAddButton" class="primary-action" type="submit">Add department</button>
+            </form>
+            <div id="departmentTable"></div>
+          </div>
         </section>
 
         <section class="admin-view" data-view-panel="detail" hidden>

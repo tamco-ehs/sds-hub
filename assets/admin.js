@@ -80,7 +80,8 @@ const elementIds = [
   "masterSearch","masterStatus","masterValidity","masterScope","masterSearchButton","masterTable","bulkToolbar","selectAllButton","clearSelectionButton",
   "selectedCount","bulkArchiveButton","bulkDeleteButton","bulkPurgeButton","bulkRestoreButton","bulkResult","bulkDialog","bulkForm","bulkDialogTitle",
   "bulkDialogMessage","bulkReason","bulkConfirmation","bulkCancelButton","bulkConfirmButton","duplicateTable","detailContent","detailNav","adminToast",
-  "duplicateDialog","duplicateMessage","duplicateExisting","duplicateCancelButton","duplicateMarkButton","duplicateRevisionButton"
+  "duplicateDialog","duplicateMessage","duplicateExisting","duplicateCancelButton","duplicateMarkButton","duplicateRevisionButton",
+  "departmentForm","departmentName","departmentCode","departmentAddButton","departmentTable"
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 let toastTimer;
@@ -125,6 +126,7 @@ function bindEvents() {
   elements.masterSearchButton.addEventListener("click", handleAsync(loadMaster));
   elements.masterScope.addEventListener("change", handleAsync(loadMaster));
   elements.masterValidity.addEventListener("change", handleAsync(loadMaster));
+  elements.departmentForm.addEventListener("submit", handleAsync(addDepartment));
   elements.openOriginalButton.addEventListener("click", () => openFile("original"));
   elements.saveReviewButton.addEventListener("click", handleAsync(saveReview));
   elements.reextractButton.addEventListener("click", handleAsync(reextract));
@@ -280,8 +282,66 @@ async function refreshView(view) {
     if (view === "review") await loadReviewList();
     if (view === "master") await loadMaster();
     if (view === "duplicates") await loadDuplicates();
+    if (view === "settings") await loadSettings();
     if (view === "detail" && state.selectedId) await loadDetail(state.selectedId);
   } catch (error) { showToast(error.message); }
+}
+
+// ---- Department master (Settings) ----
+async function loadDepartments(force = false) {
+  if (!force && state.departments) return state.departments;
+  const data = await api("/v1/admin/departments");
+  state.departments = data.departments || [];
+  return state.departments;
+}
+
+async function loadSettings() {
+  const departments = await loadDepartments(true);
+  if (!elements.departmentTable) return;
+  if (!departments.length) return elements.departmentTable.replaceChildren(emptyState("No departments yet. Add the first one above."));
+  const table = node("table", { className:"data-table" });
+  const head = node("thead", {}, [node("tr", {}, ["Department","Code","SDS linked","Status","Action"].map((title) => node("th", { textContent:title })))]);
+  const body = node("tbody");
+  for (const dept of departments) {
+    const row = node("tr");
+    row.append(node("td", { textContent:dept.name }));
+    row.append(node("td", { textContent:dept.code || "-" }));
+    row.append(node("td", { textContent:String(dept.sds_count || 0) }));
+    const statusCell = node("td"); statusCell.append(node("span", { className:`status-badge ${dept.is_active ? "validity-valid" : "validity-unknown"}`, textContent:dept.is_active ? "Active" : "Inactive" })); row.append(statusCell);
+    const actionCell = node("td");
+    if (isAdmin()) {
+      const rename = node("button", { type:"button", textContent:"Rename" });
+      rename.addEventListener("click", () => renameDepartment(dept));
+      const toggle = node("button", { type:"button", textContent:dept.is_active ? "Set inactive" : "Set active" });
+      toggle.addEventListener("click", () => toggleDepartment(dept));
+      actionCell.append(rename, toggle);
+    }
+    row.append(actionCell); body.append(row);
+  }
+  table.append(head, body); elements.departmentTable.replaceChildren(table);
+}
+
+async function addDepartment(event) {
+  event?.preventDefault();
+  if (!isAdmin()) return;
+  const name = elements.departmentName.value.trim();
+  if (!name) return;
+  await api("/v1/admin/departments", { method:"POST", body:{ name, code:elements.departmentCode.value.trim() } });
+  elements.departmentName.value = ""; elements.departmentCode.value = "";
+  showToast(`Department "${name}" added.`);
+  await loadSettings();
+}
+
+async function renameDepartment(dept) {
+  const name = (prompt("Rename department:", dept.name) || "").trim();
+  if (!name || name === dept.name) return;
+  await api(`/v1/admin/departments/${dept.id}`, { method:"PATCH", body:{ name } });
+  showToast("Department renamed."); await loadSettings();
+}
+
+async function toggleDepartment(dept) {
+  await api(`/v1/admin/departments/${dept.id}`, { method:"PATCH", body:{ is_active:!dept.is_active } });
+  showToast(`Department set ${dept.is_active ? "inactive" : "active"}.`); await loadSettings();
 }
 
 async function loadDashboard() {
@@ -353,8 +413,45 @@ async function loadReviewList() {
 
 async function openReview(documentId) {
   const data = await api(`/v1/admin/documents/${documentId}`);
-  state.selectedId = documentId; state.selectedDocument = data.document; state.selectedGroup = data.group || null; elements.detailNav.disabled = false;
+  await loadDepartments().catch(() => {});
+  state.selectedId = documentId; state.selectedDocument = data.document; state.selectedGroup = data.group || null;
+  state.selectedDepartments = (data.departments || []).map((dept) => dept.id);
+  elements.detailNav.disabled = false;
   renderReviewForm(data.document); elements.reviewForm.hidden = false;
+}
+
+// "Departments using this SDS" — checkboxes of active departments (plus any already-linked inactive
+// ones for history). Many-to-many; saved via PUT /documents/:id/departments.
+function buildDepartmentCard(documentId) {
+  const departments = state.departments || [];
+  const linked = new Set(state.selectedDepartments || []);
+  const visible = departments.filter((dept) => dept.is_active || linked.has(dept.id));
+  const card = node("div", { className:"field-wide review-summary department-card" });
+  card.append(node("span", { className:"review-summary-title", textContent:"Departments using this SDS" }));
+  if (!visible.length) { card.append(node("p", { className:"grouping-hint", textContent:"No departments defined yet — add them under Settings." })); return card; }
+  const grid = node("div", { className:"dept-checkboxes" });
+  for (const dept of visible) {
+    const label = node("label", { className:"dept-checkbox" });
+    const checkbox = node("input", { type:"checkbox" });
+    checkbox.checked = linked.has(dept.id); checkbox.dataset.deptId = dept.id; checkbox.disabled = !isAdmin();
+    label.append(checkbox, node("span", { textContent: dept.is_active ? dept.name : `${dept.name} (inactive)` }));
+    grid.append(label);
+  }
+  card.append(grid);
+  if (isAdmin()) {
+    const save = node("button", { type:"button", className:"secondary-action", textContent:"Save departments" });
+    save.addEventListener("click", () => saveDepartments(documentId, card));
+    card.append(node("div", { className:"grouping-actions" }, [save]));
+  }
+  return card;
+}
+
+async function saveDepartments(documentId, card) {
+  if (!isAdmin()) return;
+  const ids = [...card.querySelectorAll('input[type="checkbox"]:checked')].map((checkbox) => checkbox.dataset.deptId);
+  const data = await api(`/v1/admin/documents/${documentId}/departments`, { method:"PUT", body:{ department_ids:ids } });
+  state.selectedDepartments = (data.departments || []).map((dept) => dept.id);
+  showToast("Departments updated for this SDS.");
 }
 
 function renderReviewForm(record) {
@@ -363,7 +460,8 @@ function renderReviewForm(record) {
   renderReviewWarnings(record);
   const evidence = buildEvidenceSummary(record.evidence_snippets);
   const grouping = buildGroupingCard(record, state.selectedGroup);
-  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(grouping ? [grouping] : []), ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
+  const departmentCard = buildDepartmentCard(record.id);
+  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(grouping ? [grouping] : []), departmentCard, ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
   elements.reviewComment.value = "";
 }
 
@@ -766,6 +864,8 @@ async function openDetail(documentId) { state.selectedId = documentId; elements.
 
 async function loadDetail(documentId) {
   const data = await api(`/v1/admin/documents/${documentId}`); const record = data.document;
+  await loadDepartments().catch(() => {});
+  state.selectedId = documentId; state.selectedDepartments = (data.departments || []).map((dept) => dept.id);
   const summary = node("section", { className:"detail-card" }); summary.append(node("h2", { textContent:displayName(record) }));
   const list = node("dl", { className:"definition-list" });
   const fields = ["status","original_filename","approved_filename","product_name","trade_name","supplier","manufacturer","language","revision_date","issue_date","preparation_date","establishment_date","effective_date","print_date","validity_date_basis","validity_date_value","detected_date_source","detected_date_confidence","established_date","expiry_date","signal_word","extraction_confidence","extraction_method","ocr_required","possible_duplicate_flag","archived_at","archive_reason","deleted_at","delete_reason","review_required_reason"];
@@ -775,6 +875,7 @@ async function loadDetail(documentId) {
   const openPdf = node("button", { className:"secondary-action", type:"button", textContent:"Open original PDF" });
   openPdf.addEventListener("click", () => openFile("original", record.id));
   summary.append(openPdf);
+  if (!record.deleted_at) summary.append(buildDepartmentCard(record.id));
   if (isAdmin() && (record.deleted_at || record.archived_at)) {
     const restore = node("button", { className:"secondary-action", type:"button", textContent:"Restore record" });
     restore.addEventListener("click", () => { state.selectedIds = new Set([record.id]); openBulkDialog("restore"); }); summary.append(restore);

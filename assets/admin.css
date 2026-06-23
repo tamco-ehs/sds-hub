@@ -38,6 +38,10 @@
 .expiry-alert span{font-size:.72rem}
 .expiry-alert-expired{color:var(--red);background:var(--red-pale);border-color:#dba6a2}
 .expiry-alert-expiring{color:#704c00;background:var(--amber-pale);border-color:#ecd087}
+.department-card{background:#f0f7ff;border-color:#bcdcef}
+.dept-checkboxes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;margin-top:6px}
+.dept-checkbox{display:flex;align-items:center;gap:7px;font-size:.76rem;color:var(--ink)}
+.dept-checkbox input{margin:0;width:auto}
 .upload-row td:nth-child(2){font-weight:800;text-transform:capitalize}
 .upload-row-processed td:nth-child(2){color:var(--green)}
 .upload-row-duplicate td:nth-child(2){color:#704c00}

@@ -83,6 +83,18 @@ test("accepts an approved filename with parentheses/spaces but blocks path trave
   assert.equal(isValidDocument({ ...approved, file: "..\\x.pdf" }), false, "traversal rejected");
 });
 
+test("filters and aggregates by the many-to-many departments array", () => {
+  const docs = sanitizeCatalog([
+    { id: "acetone", name: "Acetone", file: "acetone.pdf", department: "Paintshop", departments: ["Paintshop", "Store"] },
+    { id: "thinner", name: "Thinner", file: "thinner.pdf", department: "GIS", departments: ["GIS"] }
+  ]);
+  assert.deepEqual(getDepartments(docs).sort(), ["GIS", "Paintshop", "Store"]);
+  const store = filterCatalog(docs, "", "Store");
+  assert.equal(store.length, 1, "matches a department anywhere in the array");
+  assert.equal(store[0].id, "acetone");
+  assert.equal(filterCatalog(docs, "", "GIS").length, 1, "single-department doc still matches");
+});
+
 test("validates safe catalog records", () => {
   assert.equal(isValidDocument(fixtures[0]), true);
   assert.equal(isValidDocument({ ...fixtures[0], file: "../secret.pdf" }), false);
