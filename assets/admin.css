@@ -45,6 +45,13 @@
 .replacement-card{background:#fff7ed;border-color:#f4d8b0}
 #replaceForm label{display:block;color:var(--muted);font-size:.72rem;font-weight:700}
 #replaceForm input{width:100%;margin:4px 0 4px}
+.review-advanced,.review-more{grid-column:1/-1;margin-top:8px;border:1px solid var(--line);border-radius:9px;background:#fbfdff}
+.review-advanced>summary,.review-more>summary{padding:10px 12px;color:var(--navy-900);font-size:.76rem;font-weight:800;cursor:pointer;list-style:revert}
+.review-advanced[open]>summary,.review-more[open]>summary{border-bottom:1px solid var(--line)}
+.review-advanced>.form-grid{margin:0;padding:12px}
+.review-more>.action-row{margin-top:0;padding:10px 12px}
+.review-primary-actions{margin-top:14px;gap:10px}
+.review-primary-actions .primary-action{flex:1;min-width:160px}
 .upload-row td:nth-child(2){font-weight:800;text-transform:capitalize}
 .upload-row-processed td:nth-child(2){color:var(--green)}
 .upload-row-duplicate td:nth-child(2){color:#704c00}

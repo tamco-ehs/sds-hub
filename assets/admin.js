@@ -492,7 +492,14 @@ function renderReviewForm(record) {
   const grouping = buildGroupingCard(record, state.selectedGroup);
   const departmentCard = buildDepartmentCard(record.id);
   const replacementCard = buildReplacementCard(state.selectedReplacement, record);
-  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(replacementCard ? [replacementCard] : []), ...(grouping ? [grouping] : []), departmentCard, ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
+  // The full editable field set is rarely needed to approve — keep it behind a disclosure so the
+  // default review is lean: key facts, issues, and any replacement/grouping/department decision.
+  const editor = node("details", { className:"review-advanced field-wide" });
+  editor.append(node("summary", { textContent:"Edit extracted fields & dates" }));
+  const editorGrid = node("div", { className:"form-grid" });
+  editorGrid.append(...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
+  editor.append(editorGrid);
+  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(replacementCard ? [replacementCard] : []), ...(grouping ? [grouping] : []), departmentCard, editor);
   elements.reviewComment.value = "";
 }
 
@@ -630,24 +637,19 @@ function buildValiditySummary(record) {
   const found = Array.isArray(record.sections_found) ? record.sections_found : [];
   const missing = Array.isArray(record.missing_sections) ? record.missing_sections : [];
   const missingText = missing.length ? missing.map((section) => `${section} (${SECTION_TITLES[section] || "?"})`).join(", ") : "None — all 16 present";
+  const validity = validityState(record);
   const card = node("div", { className:"field-wide review-summary" });
-  card.append(node("span", { className:"review-summary-title", textContent:"SDS dates, validity & 16-section completeness" }));
+  card.append(node("span", { className:"review-summary-title", textContent:"Review summary" }));
   const grid = node("div", { className:"review-summary-grid" });
   grid.append(
     summaryRow("Review category", REVIEW_DECISION_LABELS[record.review_decision] || "Legacy full review"),
     summaryRow("Risk level", formatCodeLabel(record.risk_level || "unknown"), record.risk_level === "high"),
-    summaryRow("AI verification", formatCodeLabel(record.ai_verification_status || "Not recorded"), ["error","quota_exceeded","timeout","not_configured"].includes(record.ai_verification_status)),
-    summaryRow("Existing approved match", record.existing_catalog_match ? "Yes — unchanged hash" : "No"),
-    summaryRow("Revision date", record.revision_date || "Not detected"), summaryRow("Issue date", record.issue_date || "Not detected"),
-    summaryRow("Preparation date", record.preparation_date || "Not detected"), summaryRow("Establishment date", record.establishment_date || "Not detected"),
-    summaryRow("Effective date", record.effective_date || "Not detected"), summaryRow("Print date", record.print_date || "Not detected", record.validity_date_basis === "print_date"),
-    summaryRow("Supersedes (previous SDS)", record.supersedes_date || "Not stated"),
+    summaryRow("Supplier", record.supplier || record.manufacturer || "Not detected", !record.supplier && !record.manufacturer),
+    summaryRow("Validity", validity.days === null ? validity.label : `${validity.label}${validity.expiry ? ` · until ${validity.expiry}` : ""}`, validity.state === "expired" || validity.state === "expiring"),
     summaryRow("Validity basis", DATE_BASIS_LABELS[record.validity_date_basis] || "Not established", !record.validity_date_basis || record.validity_date_basis === "print_date"),
-    summaryRow("Validity date", record.validity_date_value || record.established_date || "Not established", !record.validity_date_value),
-    summaryRow("Date confidence", `${record.detected_date_confidence || 0}%`, (record.detected_date_confidence || 0) < 70),
-    summaryRow("Detected source", record.detected_date_source || "Not detected"),
-    summaryRow("Sections found", `${found.length} of 16 · ${record.section_detection_confidence || 0}%`, found.length < 16),
-    summaryRow("Missing sections", missingText, missing.length > 0)
+    summaryRow("Sections found", `${found.length} of 16`, found.length < 16),
+    summaryRow("Missing sections", missingText, missing.length > 0),
+    summaryRow("AI verification", formatCodeLabel(record.ai_verification_status || "Not recorded"), ["error","quota_exceeded","timeout","not_configured"].includes(record.ai_verification_status))
   );
   card.append(grid); return card;
 }

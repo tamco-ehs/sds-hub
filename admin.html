@@ -98,15 +98,20 @@
               <div class="review-header"><div><span id="reviewStatus" class="status-badge"></span><h2 id="reviewTitle">Review document</h2><p id="reviewOriginal"></p></div><button id="openOriginalButton" class="secondary-action" type="button">Open original PDF</button></div>
               <div id="reviewWarnings" class="warning-box" hidden></div>
               <div id="reviewFields" class="form-grid"></div>
-              <label>Review comment<textarea id="reviewComment" rows="3" placeholder="Reason for edit, approval, rejection, or re-extraction"></textarea></label>
-              <div class="action-row">
-                <button id="saveReviewButton" class="secondary-action" type="button">Save edits</button>
-                <button id="reextractButton" class="secondary-action" type="button">Request re-extraction</button>
-                <button id="duplicateButton" class="secondary-action" data-admin-only type="button">Mark duplicate</button>
-                <button id="archiveButton" class="secondary-action" data-admin-only type="button">Archive</button>
+              <label>Review comment<textarea id="reviewComment" rows="2" placeholder="Reason for approval, rejection, or correction"></textarea></label>
+              <div class="action-row review-primary-actions">
+                <button id="approveButton" class="primary-action" data-admin-only type="button">Approve and publish</button>
                 <button id="rejectButton" class="danger-action" data-admin-only type="button">Reject</button>
-                <button id="approveButton" class="primary-action" data-admin-only type="button">Approve and rename</button>
               </div>
+              <details class="review-more">
+                <summary>More actions</summary>
+                <div class="action-row">
+                  <button id="saveReviewButton" class="secondary-action" type="button">Save edits</button>
+                  <button id="reextractButton" class="secondary-action" type="button">Request re-extraction</button>
+                  <button id="duplicateButton" class="secondary-action" data-admin-only type="button">Mark duplicate</button>
+                  <button id="archiveButton" class="secondary-action" data-admin-only type="button">Archive</button>
+                </div>
+              </details>
             </form>
           </div>
         </section>
