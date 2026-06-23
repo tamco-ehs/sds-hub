@@ -1,9 +1,9 @@
-import { assessSdsText, detectDocumentLanguage, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction } from "../_shared/extraction.ts";
+import { assessSdsText, detectDocumentLanguage, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction, toIsoDate } from "../_shared/extraction.ts";
 import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
 import { deleteRows, insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
 import { deleteReleaseAsset, downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
 import { classifySdsReview, findExtractionConflicts } from "../_shared/review-classification.ts";
-import { normalizeProductName, suggestGrouping } from "../_shared/grouping.ts";
+import { evaluateRelationship, normalizeProductName, suggestGrouping } from "../_shared/grouping.ts";
 import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, type Extraction } from "../_shared/schema.ts";
 import { computeValidity } from "../_shared/validity.ts";
 import { BlobReader, Uint8ArrayWriter, ZipReader } from "npm:@zip.js/zip.js@2.7.57";
@@ -83,7 +83,7 @@ async function route(request: Request) {
   const bulkMatch = path.match(/^\/v1\/admin\/documents\/bulk\/(archive|delete|restore|purge)$/i);
   if (bulkMatch && request.method === "POST") return bulkAction(bulkMatch[1].toLowerCase(), request, cors, requireRole(actor, "EHS_ADMIN"));
 
-  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|group|ungroup|departments|archive|restore|file))?$/i);
+  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|group|ungroup|departments|replace|archive|restore|file))?$/i);
   if (!match || !UUID_PATTERN.test(match[1])) return json({ error: "Admin endpoint not found." }, 404, cors);
   const [, id, action = ""] = match;
   if (!action && request.method === "GET") return getDocument(id, cors, actor);
@@ -97,6 +97,7 @@ async function route(request: Request) {
   if (action === "group" && request.method === "POST") return groupDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "ungroup" && request.method === "POST") return ungroupDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "departments" && request.method === "PUT") return setDocumentDepartments(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "replace" && request.method === "POST") return replaceDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "file" && request.method === "GET") return streamFile(id, url.searchParams.get("variant") || "original", true, cors, actor);
   return json({ error: "Method not allowed." }, 405, cors);
 }
@@ -397,14 +398,15 @@ async function getDocument(id: string, cors: Record<string, string> | null, acto
   const document = await fetchDocument(id);
   if (!document) return json({ error: "Document not found." }, 404, cors);
   if ((document.deleted_at || document.archived_at) && actor.role !== "EHS_ADMIN") return json({ error: "Role does not allow access to archived or deleted SDS records." }, 403, cors);
-  const [logs, reviewHistory, auditEvents, group, departments] = await Promise.all([
+  const [logs, reviewHistory, auditEvents, group, departments, replacement] = await Promise.all([
     selectRows("sds_extraction_logs", `select=*&document_id=eq.${id}&order=created_at.desc&limit=50`),
     selectRows("sds_review_history", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
     selectRows("sds_audit_events", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
     buildVariantInfo(document),
-    documentDepartments(id)
+    documentDepartments(id),
+    buildReplacementInfo(document)
   ]);
-  return json({ document, group, departments, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
+  return json({ document, group, departments, replacement, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
 }
 
 // Assemble the language-variant context an EHS reviewer needs: the suggested sibling (if any),
@@ -576,7 +578,24 @@ async function approve(id: string, request: Request, cors: Record<string, string
   await history(id, "APPROVE", existing.status, "Approved", actor, { approved_filename: filename, metadata }, body.comment);
   await auditEvent(actor, "APPROVE", approved, body.comment, existing, approved);
   if (dateChanged) await auditEvent(actor, "DATE_CORRECTION", approved, body.comment, dateBefore, dateAuditSnapshot(approved || {}));
-  return json({ document: approved, approved_filename: filename }, 200, cors);
+  // Replacement: only when EHS explicitly confirms, retire (archive) the SDS this one replaces. The old
+  // record is kept for audit, removed from the employee view, and never auto-retired without confirmation.
+  let retired = null;
+  if (existing.replaces_document_id && body.confirmReplace) {
+    const old = await fetchDocument(existing.replaces_document_id);
+    if (old && !old.deleted_at && !old.archived_at) {
+      const retiredAt = nowIso();
+      await updateRows("sds_documents", `id=eq.${old.id}`, {
+        status: "Archived", archived_at: retiredAt, archived_by: actor.userId,
+        archive_reason: `Replaced by approved SDS ${filename}`, approved_for_employee_view: false,
+        updated_at: retiredAt, version: old.version + 1
+      }, false);
+      retired = await fetchDocument(old.id);
+      await history(old.id, "RETIRE_REPLACED", old.status, "Archived", actor, { replaced_by: id }, body.comment);
+      await auditEvent(actor, "RETIRE_REPLACED", retired, body.comment || `Replaced by ${filename}`, old, retired);
+    }
+  }
+  return json({ document: approved, approved_filename: filename, retired }, 200, cors);
 }
 
 // Never overwrite an existing approved asset: derive the next free "..._r2.pdf", "..._r3.pdf" name.
@@ -789,6 +808,58 @@ async function documentDepartments(documentId: string) {
   const ids = links.map((link: Record<string, unknown>) => String(link.department_id));
   const departments = await selectRows("departments", `select=id,name,is_active&id=in.(${ids.join(",")})&order=name.asc`);
   return departments;
+}
+
+// ---- SDS replacement workflow ----
+
+// Upload a new SDS that replaces an existing record. The new SDS runs the normal extraction + review
+// pipeline and is linked to the old one; NOTHING is retired until EHS approves the replacement.
+async function replaceDocument(oldId: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const old = await fetchDocument(oldId);
+  if (!old) return json({ error: "The SDS to replace was not found." }, 404, cors);
+  if (old.deleted_at) return json({ error: "Restore this record before replacing it." }, 409, cors);
+  const form = await request.formData().catch(() => null);
+  const file = form?.get("file");
+  if (!(file instanceof File)) return json({ error: "A replacement PDF is required." }, 400, cors);
+  if (/\.zip$/i.test(file.name) || ["application/zip", "application/x-zip-compressed"].includes(file.type)) return json({ error: "Upload a single PDF, not a ZIP, when replacing an SDS." }, 400, cors);
+  if (file.size < 5 || file.size > MAX_UPLOAD_BYTES) return json({ error: "PDF must be between 5 bytes and 15 MB." }, 413, cors);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") return json({ error: "The uploaded file does not have a valid PDF signature." }, 400, cors);
+
+  const created = await ingestPdf(String(file.name || "replacement-sds.pdf"), bytes, actor, null, true);
+  if (!created) return json({ error: "The replacement SDS could not be ingested." }, 500, cors);
+  await updateRows("sds_documents", `id=eq.${created.id}`, { replaces_document_id: oldId, updated_at: nowIso() }, false);
+  const newDoc = await fetchDocument(created.id);
+  await history(created.id, "REPLACE_UPLOAD", null, String(newDoc?.status || "Needs Review"), actor, { replaces_document_id: oldId }, cleanComment(form?.get("reason")));
+  await auditEvent(actor, "REPLACE_UPLOAD", newDoc, form?.get("reason"), { replaces_document_id: oldId }, newDoc);
+  return json({ document: newDoc, replaces: { id: old.id, product_name: old.product_name || old.trade_name || "the existing SDS" } }, 201, cors);
+}
+
+// Compare a replacement SDS against the one it replaces, so EHS can confirm or block before approval.
+async function buildReplacementInfo(document: Record<string, any>) {
+  if (!document.replaces_document_id) return null;
+  const old = await fetchDocument(document.replaces_document_id);
+  if (!old) return null;
+  const toDoc = (row: Record<string, any>) => ({
+    id: row.id, product_name: row.product_name, trade_name: row.trade_name, supplier: row.supplier, manufacturer: row.manufacturer,
+    document_language: row.document_language, cas_numbers: row.cas_numbers, file_hash: row.file_sha256,
+    revision_date: row.revision_date, issue_date: row.issue_date, preparation_date: row.preparation_date, effective_date: row.effective_date
+  });
+  const relationship = evaluateRelationship(toDoc(document), toDoc(old));
+  const newDate = toIsoDate(document.revision_date || document.effective_date || document.issue_date || document.preparation_date);
+  const oldDate = toIsoDate(old.revision_date || old.effective_date || old.issue_date || old.preparation_date);
+  const dateComparison = newDate && oldDate ? (newDate > oldDate ? "newer" : newDate < oldDate ? "older" : "same") : "unknown";
+  // Same product+supplier is required for a safe replacement; otherwise EHS must decide manually.
+  const safeToReplace = ["different_revision", "exact_duplicate"].includes(relationship.relationship) && !relationship.warnings.some((w) => /supplier/i.test(w));
+  return {
+    relationship: relationship.relationship,
+    reasons: relationship.reasons,
+    warnings: relationship.warnings,
+    date_comparison: dateComparison,
+    is_language_variant: relationship.relationship === "language_variant",
+    safe_to_replace: safeToReplace,
+    old: { id: old.id, product_name: old.product_name || old.trade_name, supplier: old.supplier || old.manufacturer, revision_date: old.revision_date, document_language: old.document_language, status: old.status, approved_filename: old.approved_filename }
+  };
 }
 
 async function publicCatalog(cors: Record<string, string> | null) {

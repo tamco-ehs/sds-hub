@@ -42,6 +42,9 @@
 .dept-checkboxes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;margin-top:6px}
 .dept-checkbox{display:flex;align-items:center;gap:7px;font-size:.76rem;color:var(--ink)}
 .dept-checkbox input{margin:0;width:auto}
+.replacement-card{background:#fff7ed;border-color:#f4d8b0}
+#replaceForm label{display:block;color:var(--muted);font-size:.72rem;font-weight:700}
+#replaceForm input{width:100%;margin:4px 0 4px}
 .upload-row td:nth-child(2){font-weight:800;text-transform:capitalize}
 .upload-row-processed td:nth-child(2){color:var(--green)}
 .upload-row-duplicate td:nth-child(2){color:#704c00}

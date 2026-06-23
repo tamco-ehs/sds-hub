@@ -189,6 +189,19 @@
     </div>
   </dialog>
 
+  <dialog id="replaceDialog" class="confirmation-dialog">
+    <form id="replaceForm" class="dialog-body">
+      <h2>Replace SDS</h2>
+      <p id="replaceMessage"></p>
+      <label>New SDS PDF<input id="replaceFile" type="file" accept="application/pdf,.pdf" required></label>
+      <label>Reason (optional)<input id="replaceReason" type="text" maxlength="300" placeholder="e.g. supplier issued a newer revision"></label>
+      <div class="action-row">
+        <button id="replaceCancelButton" class="secondary-action" type="button">Cancel</button>
+        <button id="replaceSubmitButton" class="primary-action" type="submit">Upload replacement</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="adminToast" class="admin-toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

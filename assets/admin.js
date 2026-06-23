@@ -81,7 +81,8 @@ const elementIds = [
   "selectedCount","bulkArchiveButton","bulkDeleteButton","bulkPurgeButton","bulkRestoreButton","bulkResult","bulkDialog","bulkForm","bulkDialogTitle",
   "bulkDialogMessage","bulkReason","bulkConfirmation","bulkCancelButton","bulkConfirmButton","duplicateTable","detailContent","detailNav","adminToast",
   "duplicateDialog","duplicateMessage","duplicateExisting","duplicateCancelButton","duplicateMarkButton","duplicateRevisionButton",
-  "departmentForm","departmentName","departmentCode","departmentAddButton","departmentTable"
+  "departmentForm","departmentName","departmentCode","departmentAddButton","departmentTable",
+  "replaceDialog","replaceForm","replaceMessage","replaceFile","replaceReason","replaceCancelButton","replaceSubmitButton"
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 let toastTimer;
@@ -127,6 +128,8 @@ function bindEvents() {
   elements.masterScope.addEventListener("change", handleAsync(loadMaster));
   elements.masterValidity.addEventListener("change", handleAsync(loadMaster));
   elements.departmentForm.addEventListener("submit", handleAsync(addDepartment));
+  elements.replaceForm.addEventListener("submit", handleAsync(submitReplace));
+  elements.replaceCancelButton.addEventListener("click", () => elements.replaceDialog.close());
   elements.openOriginalButton.addEventListener("click", () => openFile("original"));
   elements.saveReviewButton.addEventListener("click", handleAsync(saveReview));
   elements.reextractButton.addEventListener("click", handleAsync(reextract));
@@ -416,6 +419,7 @@ async function openReview(documentId) {
   await loadDepartments().catch(() => {});
   state.selectedId = documentId; state.selectedDocument = data.document; state.selectedGroup = data.group || null;
   state.selectedDepartments = (data.departments || []).map((dept) => dept.id);
+  state.selectedReplacement = data.replacement || null;
   elements.detailNav.disabled = false;
   renderReviewForm(data.document); elements.reviewForm.hidden = false;
 }
@@ -454,6 +458,32 @@ async function saveDepartments(documentId, card) {
   showToast("Departments updated for this SDS.");
 }
 
+// ---- Replace SDS ----
+function openReplaceDialog(record) {
+  if (!isAdmin()) return;
+  state.replaceTargetId = record.id;
+  elements.replaceMessage.textContent = `Upload a newer SDS to replace "${displayName(record)}"${record.revision_date ? ` (rev ${record.revision_date})` : ""}. The new SDS runs the normal EHS review and is compared against this one; the current SDS is retired only after you approve the replacement.`;
+  elements.replaceFile.value = ""; elements.replaceReason.value = "";
+  elements.replaceDialog.showModal();
+}
+
+async function submitReplace(event) {
+  event?.preventDefault();
+  if (!isAdmin() || !state.replaceTargetId) return;
+  const file = elements.replaceFile.files?.[0];
+  if (!file) return showToast("Choose a replacement PDF first.");
+  const form = new FormData();
+  form.append("file", file);
+  if (elements.replaceReason.value.trim()) form.append("reason", elements.replaceReason.value.trim());
+  elements.replaceSubmitButton.disabled = true;
+  try {
+    const data = await api(`/v1/admin/documents/${state.replaceTargetId}/replace`, { method:"POST", body:form });
+    elements.replaceDialog.close();
+    showToast("Replacement uploaded — review and approve it to retire the old SDS.");
+    if (data.document?.id) { await showView("review"); await openReview(data.document.id); }
+  } finally { elements.replaceSubmitButton.disabled = false; }
+}
+
 function renderReviewForm(record) {
   elements.reviewStatus.textContent = record.status; elements.reviewStatus.dataset.status = record.status;
   elements.reviewTitle.textContent = displayName(record); elements.reviewOriginal.textContent = `Original: ${record.original_filename}`;
@@ -461,7 +491,8 @@ function renderReviewForm(record) {
   const evidence = buildEvidenceSummary(record.evidence_snippets);
   const grouping = buildGroupingCard(record, state.selectedGroup);
   const departmentCard = buildDepartmentCard(record.id);
-  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(grouping ? [grouping] : []), departmentCard, ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
+  const replacementCard = buildReplacementCard(state.selectedReplacement, record);
+  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(replacementCard ? [replacementCard] : []), ...(grouping ? [grouping] : []), departmentCard, ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
   elements.reviewComment.value = "";
 }
 
@@ -550,6 +581,35 @@ function buildVariantCompare(record, candidate) {
   ];
   for (const [label,left,right] of rows) table.append(node("tr",{},[ node("td",{textContent:label}), node("td",{textContent:left}), node("td",{textContent:right}) ]));
   return table;
+}
+
+// Replacement comparison card: new SDS vs the one it replaces, with EHS guidance.
+function buildReplacementCard(replacement, record) {
+  if (!replacement || !replacement.old) return null;
+  const old = replacement.old;
+  const card = node("div", { className:"field-wide review-summary replacement-card" });
+  card.append(node("span", { className:"review-summary-title", textContent:"Replacement comparison" }));
+  const verdict = replacement.is_language_variant ? "This looks like a LANGUAGE VARIANT — link it under the grouping card instead of replacing."
+    : !replacement.safe_to_replace ? "Product or supplier differs — confirm carefully; this is not a straightforward replacement."
+    : replacement.date_comparison === "newer" ? "Newer revision of the same SDS — safe to replace once approved."
+    : replacement.date_comparison === "older" ? "WARNING: this SDS is OLDER than the one it would replace."
+    : replacement.date_comparison === "same" ? "Same revision date as the current SDS — confirm this is actually a new revision."
+    : "Same product — confirm the dates before replacing.";
+  card.append(node("p", { className:"grouping-hint", textContent:verdict }));
+  const table = node("table", { className:"variant-compare" });
+  table.append(node("tr", {}, [ node("th",{textContent:""}), node("th",{textContent:"New (this SDS)"}), node("th",{textContent:"Current (would retire)"}) ]));
+  const rows = [
+    ["Product", displayName(record), old.product_name || "—"],
+    ["Supplier", record.supplier || record.manufacturer || "—", old.supplier || "—"],
+    ["Language", LANG_LABELS[record.document_language] || "?", LANG_LABELS[old.document_language] || "?"],
+    ["Revision date", record.revision_date || "—", old.revision_date || "—"],
+    ["Status", record.status || "—", old.status || "—"]
+  ];
+  for (const [label,left,right] of rows) table.append(node("tr",{},[ node("td",{textContent:label}), node("td",{textContent:left}), node("td",{textContent:right}) ]));
+  card.append(table);
+  for (const warning of (replacement.warnings || [])) card.append(node("p", { className:"grouping-hint", textContent:`⚠ ${warning}` }));
+  card.append(node("p", { className:"grouping-hint", textContent:"Approving this SDS will offer to retire the current one (kept for audit)." }));
+  return card;
 }
 
 async function groupAsVariant(candidateId) {
@@ -656,7 +716,16 @@ async function saveReview() {
 
 async function approve() {
   if (!isAdmin()) return;
-  await runApprove({ metadata:collectReviewMetadata(), comment:elements.reviewComment.value });
+  const payload = { metadata:collectReviewMetadata(), comment:elements.reviewComment.value };
+  const replacement = state.selectedReplacement;
+  if (replacement && replacement.old) {
+    if (replacement.is_language_variant) {
+      showToast("This looks like a language variant — link it under the grouping card instead of replacing.");
+    }
+    const old = replacement.old;
+    payload.confirmReplace = confirm(`Approve this SDS and RETIRE the SDS it replaces?\n\nWould retire: ${old.product_name || "the previous SDS"}${old.revision_date ? " (rev " + old.revision_date + ")" : ""}.\nThe old SDS is archived (kept for audit) and removed from the employee view.\n\nOK = approve and retire the old SDS.\nCancel = approve this SDS only and keep the old one active.`);
+  }
+  await runApprove(payload);
 }
 
 async function runApprove(payload) {
@@ -705,7 +774,8 @@ async function confirmUploadAsNewRevision() {
 }
 
 async function finishApproval(data) {
-  showToast(`Approved as ${data.approved_filename}`); state.selectedDocument = data.document;
+  showToast(data.retired ? `Approved as ${data.approved_filename}; previous SDS retired.` : `Approved as ${data.approved_filename}`);
+  state.selectedDocument = data.document; state.selectedReplacement = null;
   elements.reviewForm.hidden = true; state.selectedId = ""; await loadReviewList();
 }
 
@@ -815,6 +885,11 @@ function renderDocumentTable(container, documents, { compact = false, selectable
       const openBtn = node("button", { type:"button", textContent:"Open PDF" });
       openBtn.addEventListener("click", () => openFile("original", record.id));
       actionCell.append(openBtn);
+      if (isAdmin()) {
+        const replaceBtn = node("button", { type:"button", textContent:"Replace" });
+        replaceBtn.addEventListener("click", () => openReplaceDialog(record));
+        actionCell.append(replaceBtn);
+      }
     }
     row.append(actionCell); body.append(row);
   }
@@ -875,6 +950,11 @@ async function loadDetail(documentId) {
   const openPdf = node("button", { className:"secondary-action", type:"button", textContent:"Open original PDF" });
   openPdf.addEventListener("click", () => openFile("original", record.id));
   summary.append(openPdf);
+  if (isAdmin() && !record.deleted_at) {
+    const replaceBtn = node("button", { className:"secondary-action", type:"button", textContent:"Replace SDS" });
+    replaceBtn.addEventListener("click", () => openReplaceDialog(record));
+    summary.append(replaceBtn);
+  }
   if (!record.deleted_at) summary.append(buildDepartmentCard(record.id));
   if (isAdmin() && (record.deleted_at || record.archived_at)) {
     const restore = node("button", { className:"secondary-action", type:"button", textContent:"Restore record" });
