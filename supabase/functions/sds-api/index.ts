@@ -15,7 +15,8 @@ const MAX_ZIP_PDFS = 20;
 const MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
 const MAX_TEXT_AUDIT_LENGTH = 50000;
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-const ASK_PDF_MAX_BYTES = 12 * 1024 * 1024;
+const ASK_PDF_MAX_BYTES = 12 * 1024 * 1024; // AI/Gemini inline limit — keep modest
+const PREVIEW_PDF_MAX_BYTES = 25 * 1024 * 1024; // CORS preview proxy — generous headroom over the 15 MB upload cap
 const ASK_RATE_LIMIT = 10;
 const ASK_RATE_WINDOW_MS = 60000;
 const ASK_GEMINI_TIMEOUT_MS = 25000;
@@ -739,7 +740,7 @@ async function streamCatalogFile(url: URL, cors: Record<string, string> | null) 
   if (!resolved) return json({ error: "Approved SDS not found." }, 404, cors);
   let bytes: Uint8Array;
   try {
-    bytes = await fetchAskPdf(resolved.pdfUrl);
+    bytes = await fetchAskPdf(resolved.pdfUrl, PREVIEW_PDF_MAX_BYTES);
   } catch (error) {
     console.error("Catalog PDF proxy failed", safeError(error));
     return json({ error: "The official SDS PDF is temporarily unavailable. Open it directly instead." }, 502, cors);
@@ -828,7 +829,7 @@ async function loadStaticCatalog(): Promise<Record<string, unknown>[]> {
   return documents;
 }
 
-async function fetchAskPdf(pdfUrl: string) {
+async function fetchAskPdf(pdfUrl: string, maxBytes = ASK_PDF_MAX_BYTES) {
   const parsed = new URL(pdfUrl);
   const allowedHosts = new Set([
     new URL(pagesBaseUrl()).host, "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"
@@ -836,9 +837,9 @@ async function fetchAskPdf(pdfUrl: string) {
   if (parsed.protocol !== "https:" || !allowedHosts.has(parsed.host)) throw new Error("Disallowed SDS PDF location");
   const response = await fetch(pdfUrl, { headers: { Accept: "application/pdf" }, redirect: "follow" });
   if (!response.ok) throw new Error(`SDS PDF returned HTTP ${response.status}`);
-  if (Number(response.headers.get("Content-Length") || 0) > ASK_PDF_MAX_BYTES) throw new Error("SDS PDF exceeds the AI size limit");
+  if (Number(response.headers.get("Content-Length") || 0) > maxBytes) throw new Error("SDS PDF exceeds the size limit");
   const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > ASK_PDF_MAX_BYTES) throw new Error("SDS PDF exceeds the AI size limit");
+  if (bytes.byteLength > maxBytes) throw new Error("SDS PDF exceeds the size limit");
   if (new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("Approved file is not a valid PDF");
   return bytes;
 }
