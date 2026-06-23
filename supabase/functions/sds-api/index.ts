@@ -55,6 +55,7 @@ async function route(request: Request) {
     return new Response(null, { status: 204, headers: cors });
   }
   if (path === "/v1/catalog" && request.method === "GET") return publicCatalog(cors);
+  if (path === "/v1/catalog/file" && request.method === "GET") return streamCatalogFile(url, cors);
 
   const publicFile = path.match(/^\/v1\/documents\/([a-f0-9-]+)\/file$/i);
   if (publicFile && request.method === "GET") return streamFile(publicFile[1], "approved", false, cors);
@@ -725,6 +726,29 @@ async function publicCatalog(cors: Record<string, string> | null) {
       recommendedUse: row.recommended_use || ""
     }))
   }, 200, cors);
+}
+
+// Public, CORS-enabled PDF proxy for the inline preview. GitHub release assets do not send CORS
+// headers, so a browser cannot byte-fetch them for PDF.js; we fetch the approved SDS server-side and
+// re-serve it same-origin with CORS. "Open official SDS PDF" still uses the direct GitHub link.
+async function streamCatalogFile(url: URL, cors: Record<string, string> | null) {
+  if (!cors) return json({ error: "Origin is not allowed." }, 403);
+  const chemicalId = String(url.searchParams.get("id") || "").trim();
+  if (!UUID_PATTERN.test(chemicalId) && !STATIC_ID_PATTERN.test(chemicalId)) return json({ error: "A valid document id is required." }, 400, cors);
+  const resolved = await resolveSdsForAsk(chemicalId);
+  if (!resolved) return json({ error: "Approved SDS not found." }, 404, cors);
+  let bytes: Uint8Array;
+  try {
+    bytes = await fetchAskPdf(resolved.pdfUrl);
+  } catch (error) {
+    console.error("Catalog PDF proxy failed", safeError(error));
+    return json({ error: "The official SDS PDF is temporarily unavailable. Open it directly instead." }, 502, cors);
+  }
+  const headers = new Headers(cors);
+  headers.set("Content-Type", "application/pdf");
+  headers.set("Content-Disposition", "inline");
+  headers.set("Cache-Control", "public, max-age=300");
+  return new Response(bytes as BodyInit, { headers });
 }
 
 // Public, grounded Q&A for end users. Answers only from the selected official SDS.

@@ -483,21 +483,22 @@ function showDocument(documentRecord, { updateHistory = true, scroll = true } = 
   elements.hazardTags.replaceChildren(tagFragment);
   elements.hazardTags.hidden = documentRecord.hazards.length === 0;
 
-  const pdfUrl = getDocumentPdfUrl(documentRecord);
+  const pdfUrl = getDocumentPdfUrl(documentRecord);       // direct GitHub link — for "Open official SDS PDF"
+  const previewUrl = getPreviewPdfUrl(documentRecord);    // same-origin CORS proxy — for in-page byte fetch
   elements.pdfLink.href = pdfUrl;
   elements.pdfLink.dataset.pdfUrl = pdfUrl;
-  elements.previewButton.dataset.pdfUrl = pdfUrl;
+  elements.previewButton.dataset.pdfUrl = previewUrl;
   elements.previewButton.setAttribute("aria-expanded", "false");
   elements.previewButton.querySelector("span").textContent = "Preview PDF on this page";
   elements.pdfPreviewPanel.hidden = true;
   state.previewToken += 1;
   elements.pdfViewer.replaceChildren();
-  elements.offlineButton.dataset.pdfUrl = pdfUrl;
+  elements.offlineButton.dataset.pdfUrl = previewUrl;
   elements.offlineButton.dataset.revisionDate = documentRecord.revisionDate;
   elements.offlineButton.disabled = false;
   elements.offlineButton.querySelector("span").textContent = "Store offline on this device";
   resetOfflineStatus();
-  void updateOfflineStatus(pdfUrl, documentRecord.revisionDate);
+  void updateOfflineStatus(previewUrl, documentRecord.revisionDate);
 
   elements.aiQuestion.value = "";
   updateQuestionCounter();
@@ -723,7 +724,7 @@ async function pruneOfflineDocuments() {
 
   try {
     const cache = await caches.open(DOCUMENT_CACHE);
-    const allowedUrls = new Set(state.catalog.map(getDocumentPdfUrl));
+    const allowedUrls = new Set(state.catalog.flatMap((doc) => [getDocumentPdfUrl(doc), getPreviewPdfUrl(doc)]));
     const requests = await cache.keys();
     await Promise.all(requests.filter((request) => !allowedUrls.has(request.url)).map((request) => cache.delete(request)));
   } catch (error) {
@@ -733,6 +734,17 @@ async function pruneOfflineDocuments() {
 
 function getDocumentPdfUrl(documentRecord) {
   return safeHttpUrl(documentRecord.pdfUrl) || new URL(`./pdfs/${documentRecord.file}`, window.location.href).href;
+}
+
+// URL for byte-fetching the PDF in-page (PDF.js preview + offline cache). GitHub release assets are
+// cross-origin and send no CORS headers, so we route them through the same-origin catalog proxy.
+// Same-origin local ./pdfs/ files (and deployments without a catalog API) are fetched directly.
+function getPreviewPdfUrl(documentRecord) {
+  const catalogApi = safeHttpUrl(config.catalogApiUrl);
+  if (catalogApi && documentRecord.pdfUrl && /^https?:\/\//i.test(documentRecord.pdfUrl)) {
+    return `${config.catalogApiUrl.replace(/\/$/, "")}/file?id=${encodeURIComponent(documentRecord.id)}`;
+  }
+  return getDocumentPdfUrl(documentRecord);
 }
 
 function updateQuestionCounter() {
