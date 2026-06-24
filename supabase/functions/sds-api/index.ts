@@ -721,11 +721,25 @@ async function dashboard(cors: Record<string, string> | null) {
     const days = Math.ceil((Date.parse(`${value}T00:00:00Z`) - todayMs) / 86400000);
     if (days < 0) expired += 1; else if (days <= 30) expiringSoon += 1;
   }
+  // AI assistant usage (each public question logs a row in sds_ask_usage) — a rough gauge against the
+  // Gemini free-tier daily quota. Never let a missing/large table break the dashboard.
+  let aiQuestions24h = 0, aiQuestions7d = 0;
+  try {
+    const since = new Date(Date.now() - 7 * 86400000).toISOString();
+    const asks = await selectRows("sds_ask_usage", `select=created_at&created_at=gte.${encodeURIComponent(since)}&limit=10000`);
+    const dayAgo = Date.now() - 86400000;
+    aiQuestions7d = asks.length;
+    aiQuestions24h = asks.filter((row: Record<string, unknown>) => new Date(String(row.created_at)).getTime() >= dayAgo).length;
+  } catch (error) {
+    console.warn("AI usage count skipped", safeError(error));
+  }
   return json({
     counts,
     overdue_review_count: rows.filter((row: Record<string, unknown>) => row.status === "Needs Review" && new Date(String(row.updated_at)).getTime() < overdue).length,
     expiring_soon_count: expiringSoon,
     expired_count: expired,
+    ai_questions_24h: aiQuestions24h,
+    ai_questions_7d: aiQuestions7d,
     recent: rows.slice(0, 10)
   }, 200, cors);
 }

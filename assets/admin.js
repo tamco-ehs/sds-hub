@@ -74,7 +74,7 @@ const state = {
 const elementIds = [
   "connectionBadge","connectionPanel","workspace","adminSidebar","loginForm","emailInput","passwordInput","loginButton","loginError","loginNotice","forgotPasswordButton","logoutButton",
   "changePasswordButton","passwordDialog","passwordForm","passwordDialogTitle","newPasswordInput","confirmPasswordInput","passwordError","passwordCancelButton","passwordSaveButton",
-  "dashboardCards","expiryReminders","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","uploadStepper","queueTable","reviewList",
+  "dashboardCards","expiryReminders","aiUsage","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","uploadStepper","queueTable","reviewList",
   "reviewForm","reviewStatus","reviewTitle","reviewOriginal","reviewWarnings","reviewFields","reviewComment",
   "openOriginalButton","saveReviewButton","reextractButton","duplicateButton","archiveButton","rejectButton","approveButton",
   "masterSearch","masterStatus","masterValidity","masterScope","masterSearchButton","masterTable","bulkToolbar","selectAllButton","clearSelectionButton",
@@ -354,7 +354,20 @@ async function loadDashboard() {
     node("strong", { textContent:String(data.counts[status] || 0) }), node("span", { textContent:status })
   ])));
   renderExpiryReminders(data.expiring_soon_count || 0, data.expired_count || 0);
+  renderAiUsage(data.ai_questions_24h || 0, data.ai_questions_7d || 0);
   renderDocumentTable(elements.recentTable, data.recent || [], { compact:true });
+}
+
+// Tiny AI-assistant usage gauge (questions logged in sds_ask_usage) — a feel for Gemini free-tier spend.
+function renderAiUsage(last24h, last7d) {
+  if (!elements.aiUsage) return;
+  elements.aiUsage.hidden = false;
+  elements.aiUsage.replaceChildren(
+    node("span", { className:"ai-usage-label", textContent:"AI assistant questions" }),
+    node("span", {}, [ node("strong", { textContent:String(last24h) }), node("small", { textContent:"last 24 h" }) ]),
+    node("span", {}, [ node("strong", { textContent:String(last7d) }), node("small", { textContent:"last 7 days" }) ]),
+    node("span", { className:"ai-usage-note", textContent:"gemini-2.5-flash · free tier · uploads also use quota" })
+  );
 }
 
 // Dashboard expiry reminder: clickable alerts that jump to the master list filtered to the matching set.
