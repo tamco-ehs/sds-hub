@@ -1084,14 +1084,43 @@ a {
 
 .ai-response {
   margin-top: 13px;
-  padding: 13px;
+  padding: 14px 15px;
   color: var(--slate-700);
   background: var(--blue-050);
   border-left: 3px solid var(--blue-600);
   border-radius: 4px 9px 9px 4px;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   line-height: 1.55;
-  white-space: pre-wrap;
+}
+
+.ai-response p {
+  margin: 0 0 8px;
+}
+
+.ai-response > :first-child {
+  margin-top: 0;
+}
+
+.ai-response > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-response ul {
+  margin: 4px 0 10px;
+  padding-left: 18px;
+}
+
+.ai-response li {
+  margin: 3px 0;
+}
+
+.ai-answer-heading {
+  margin: 11px 0 4px;
+  color: var(--navy-900);
+}
+
+.ai-answer-heading strong {
+  font-size: 0.82rem;
 }
 
 .ai-response.is-error {

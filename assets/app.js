@@ -758,6 +758,50 @@ function updateQuestionCounter() {
   elements.questionCounter.textContent = `${elements.aiQuestion.value.length} / ${elements.aiQuestion.maxLength}`;
 }
 
+// Render the AI answer's light markdown (headings, bullets, **bold**) into safe DOM nodes — built with
+// textContent only (never innerHTML), so AI output cannot inject markup.
+function renderAiAnswer(container, text) {
+  container.replaceChildren();
+  let list = null;
+  const flushList = () => { if (list) { container.append(list); list = null; } };
+  for (const rawLine of String(text).replace(/\r/g, "").split("\n")) {
+    const line = rawLine.trim();
+    if (!line) { flushList(); continue; }
+    const bullet = line.match(/^(?:[*\-•]|\d+[.)])\s+(.*)$/);
+    if (bullet) {
+      if (!list) list = document.createElement("ul");
+      const li = document.createElement("li");
+      appendInlineMarkdown(li, bullet[1]);
+      list.append(li);
+      continue;
+    }
+    flushList();
+    const heading = line.match(/^#{1,4}\s+(.*)$/) || line.match(/^\*\*(.+?)\*\*:?\s*$/);
+    if (heading) {
+      const node = document.createElement("p");
+      node.className = "ai-answer-heading";
+      const strong = document.createElement("strong");
+      strong.textContent = heading[1].replace(/:$/, "");
+      node.append(strong);
+      container.append(node);
+      continue;
+    }
+    const paragraph = document.createElement("p");
+    appendInlineMarkdown(paragraph, line);
+    container.append(paragraph);
+  }
+  flushList();
+}
+
+function appendInlineMarkdown(parent, text) {
+  for (const part of String(text).split(/(\*\*[^*]+\*\*)/g)) {
+    if (!part) continue;
+    const bold = part.match(/^\*\*([^*]+)\*\*$/);
+    if (bold) { const strong = document.createElement("strong"); strong.textContent = bold[1]; parent.append(strong); }
+    else parent.append(document.createTextNode(part.replace(/\*\*/g, "")));
+  }
+}
+
 async function askAssistant() {
   const documentRecord = state.catalog.find((item) => item.id === state.selectedId);
   const question = elements.aiQuestion.value.trim();
@@ -765,7 +809,7 @@ async function askAssistant() {
   if (!documentRecord || !question || !proxyUrl || !config.aiEnabled) return;
 
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  const timeout = window.setTimeout(() => controller.abort(), 28000); // > backend Gemini timeout (25s)
   elements.askAiButton.disabled = true;
   elements.askAiButton.textContent = "Checking...";
   elements.aiResponse.hidden = false;
@@ -790,7 +834,7 @@ async function askAssistant() {
       throw new Error(payload.error || `Assistant returned HTTP ${response.status}`);
     }
 
-    elements.aiResponse.textContent = payload.answer.trim();
+    renderAiAnswer(elements.aiResponse, payload.answer.trim());
   } catch (error) {
     console.error("AI assistance is unavailable", error);
     elements.aiResponse.classList.add("is-error");
