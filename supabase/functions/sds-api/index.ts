@@ -1001,7 +1001,16 @@ async function askQuestion(request: Request, cors: Record<string, string> | null
     const answer = await answerFromSds(geminiKey, resolved, question, pdfBytes);
     return json({ answer, chemicalId, revisionDate: resolved.revisionDate }, 200, cors);
   } catch (error) {
-    console.error("Ask Gemini failed", safeError(error));
+    const detail = safeError(error);
+    console.error("Ask Gemini failed", detail);
+    // On the Gemini free tier a quick second question often trips the per-minute rate limit (HTTP 429).
+    // Tell the worker it is a temporary, retryable limit rather than a generic outage.
+    if (/\b429\b|quota|rate.?limit|resource.?exhausted/i.test(detail)) {
+      return json({ error: "The AI assistant is busy right now (free-tier rate limit). Please wait about a minute, then ask again." }, 429, { ...cors, "Retry-After": "60" });
+    }
+    if (/abort|timeout|timed out|deadline/i.test(detail)) {
+      return json({ error: "The AI assistant took too long to respond. Please try again in a moment." }, 504, cors);
+    }
     return json({ error: "AI assistance is unavailable. Open the official SDS for authoritative information." }, 502, cors);
   }
 }

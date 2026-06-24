@@ -844,9 +844,15 @@ async function askAssistant() {
 
     renderAiAnswer(elements.aiResponse, payload.answer.trim());
   } catch (error) {
-    console.error("AI assistance is unavailable", error);
+    console.error("AI assistance failed", error);
     elements.aiResponse.classList.add("is-error");
-    elements.aiResponse.textContent = "AI assistance is unavailable. Open the official SDS PDF for authoritative safety information. For an active emergency, follow the site emergency plan.";
+    const reason = String(error?.message || "");
+    const networkOrTimeout = !reason || /Failed to fetch|NetworkError|aborted|abort/i.test(reason);
+    // Show the server's specific reason (e.g. "busy — free-tier limit, wait a minute") instead of a
+    // generic outage message, so a temporary rate limit isn't mistaken for a broken feature.
+    elements.aiResponse.textContent = networkOrTimeout
+      ? "AI assistance is temporarily unavailable. Open the official SDS PDF for authoritative safety information. For an active emergency, follow the site emergency plan."
+      : `${reason} For authoritative information, open the official SDS PDF; in an emergency follow the site emergency plan.`;
   } finally {
     window.clearTimeout(timeout);
     elements.askAiButton.disabled = false;
