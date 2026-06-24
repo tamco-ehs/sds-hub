@@ -1030,12 +1030,12 @@ async function answerFromSds(apiKey: string, resolved: { name: string; revisionD
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: "You are a document-grounded workplace safety assistant. Answer ONLY from the attached official Safety Data Sheet. If the answer is not in this SDS, say you cannot determine it from this document and point the worker to the relevant SDS section and the site safety manager. Never invent exposure limits, PPE, first-aid steps, incompatibilities, or disposal steps. Never override the SDS, the site emergency plan, emergency services, poison control, or medical professionals. Reply in the same language as the worker's question. Format the reply so it is easy to read: short bold section headings (for example the hazard, PPE, or first-aid topic) followed by simple '- ' bullet points, one fact per bullet. Name the SDS section numbers you used. Keep it complete but concise, and finish your answer fully." }] },
+        system_instruction: { parts: [{ text: "You are a document-grounded workplace safety assistant. ALWAYS write your entire reply in the SAME language as the worker's question — if the worker asks in Malay/Bahasa Melayu, answer fully in Malay; if in English, answer in English; mirror their language even if the SDS itself is in another language. Answer ONLY from the attached official Safety Data Sheet. If the answer is not in this SDS, say (in the worker's language) that you cannot determine it from this document and point them to the relevant SDS section and the site safety manager. Never invent exposure limits, PPE, first-aid steps, incompatibilities, or disposal steps. Never override the SDS, the site emergency plan, emergency services, poison control, or medical professionals. Format the reply for easy reading: short bold section headings followed by simple '- ' bullet points, one fact per bullet, and name the SDS section numbers you used. Keep it complete and finish fully." }] },
         contents: [{ role: "user", parts: [
           { inline_data: { mime_type: "application/pdf", data: askBytesToBase64(pdfBytes) } },
-          { text: `Product: ${resolved.name}\nSDS revision: ${resolved.revisionDate || "Not stated"}\nWorker question: ${question}` }
+          { text: `Product: ${resolved.name}\nSDS revision: ${resolved.revisionDate || "Not stated"}\nWorker question (reply in this question's language): ${question}` }
         ] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 1500, thinkingConfig: { thinkingBudget: 0 } }
+        generationConfig: { temperature: 0.1, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 512 } }
       }),
       signal: controller.signal
     });
