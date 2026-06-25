@@ -80,6 +80,8 @@ const elements = {
   aiResponse: document.querySelector("#aiResponse"),
   catalogUpdated: document.querySelector("#catalogUpdated"),
   detailLanguageSwitcher: document.querySelector("#detailLanguageSwitcher"),
+  disclaimerDialog: document.querySelector("#disclaimerDialog"),
+  disclaimerAckButton: document.querySelector("#disclaimerAckButton"),
   toast: document.querySelector("#toast")
 };
 
@@ -935,6 +937,9 @@ function bindEvents() {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void askAssistant();
   });
 
+  document.querySelectorAll("[data-open-disclaimer]").forEach((button) => button.addEventListener("click", openDisclaimer));
+  elements.disclaimerAckButton?.addEventListener("click", acknowledgeDisclaimer);
+
   window.addEventListener("popstate", () => {
     if (!state.loaded) return;
     applyRoute();
@@ -942,6 +947,24 @@ function bindEvents() {
     renderLanguageFilters();
     renderCatalog();
   });
+}
+
+function openDisclaimer() {
+  if (elements.disclaimerDialog && typeof elements.disclaimerDialog.showModal === "function") {
+    try { elements.disclaimerDialog.showModal(); } catch { /* already open or unsupported */ }
+  }
+}
+
+function acknowledgeDisclaimer() {
+  try { localStorage.setItem("sdsDisclaimerAck", "1"); } catch { /* storage blocked */ }
+  elements.disclaimerDialog?.close();
+}
+
+// Show the safety/AI disclaimer once per device so every employee sees it before relying on the tool.
+function maybeShowDisclaimer() {
+  let acknowledged = false;
+  try { acknowledged = localStorage.getItem("sdsDisclaimerAck") === "1"; } catch { acknowledged = false; }
+  if (!acknowledged) openDisclaimer();
 }
 
 async function registerServiceWorker() {
@@ -955,5 +978,6 @@ async function registerServiceWorker() {
 
 applyConfiguration();
 bindEvents();
+maybeShowDisclaimer();
 void loadCatalog();
 void registerServiceWorker();

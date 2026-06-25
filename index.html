@@ -200,7 +200,7 @@
             <span class="ai-mark" aria-hidden="true">AI</span>
             <div>
               <h3>Supplemental safety assistant</h3>
-              <p>Not a replacement for the official SDS or emergency procedures.</p>
+              <p>Not a replacement for the official SDS or emergency procedures. <button type="button" class="disclaimer-link" data-open-disclaimer>Read the full disclaimer</button></p>
             </div>
           </div>
           <label for="aiQuestion">Ask about this product</label>
@@ -228,7 +228,23 @@
       <p>Digital SDS Hub <span aria-hidden="true">&middot;</span> Immediate access to approved safety documents</p>
       <p id="catalogUpdated">Catalog status unavailable</p>
     </div>
+    <div class="shell footer-disclaimer">
+      <p><strong>Reference only &mdash; not the official SDS.</strong> Some data is extracted or summarised by automated tools, including AI, and may be incorrect or incomplete. Always verify safety-critical information (hazards, PPE, handling, storage, first aid, spills, firefighting, disposal) against the original manufacturer SDS and consult EHS. <button type="button" class="disclaimer-link" data-open-disclaimer>Read the full safety &amp; AI disclaimer</button></p>
+    </div>
   </footer>
+
+  <dialog id="disclaimerDialog" class="disclaimer-dialog" aria-labelledby="disclaimerTitle">
+    <div class="disclaimer-body">
+      <h2 id="disclaimerTitle">Safety &amp; AI disclaimer</h2>
+      <p>This platform provides quick access to SDS and chemical safety information. Some data may be extracted, summarised or assisted by automated tools, including AI. Such information is provided for reference only and must not be treated as the official SDS. The approved manufacturer or supplier SDS remains the source of truth.</p>
+      <p>AI-extracted data may be incorrect, incomplete, outdated or misread. Users must verify safety-critical information against the original SDS before using any chemical, including hazards, PPE, handling, storage, first aid, spill response, firefighting and disposal requirements.</p>
+      <p>Where information is unclear, missing, conflicting or safety-critical, users must refer to the original SDS and consult EHS before proceeding. This platform does not replace legal compliance, risk assessment, training, supervision, workplace procedures, permit-to-work requirements or professional safety judgment.</p>
+      <p>Nothing in this notice excludes or limits any statutory duty or liability that cannot be excluded under applicable law.</p>
+      <div class="disclaimer-actions">
+        <button id="disclaimerAckButton" class="primary-button" type="button">I understand</button>
+      </div>
+    </div>
+  </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
